@@ -10,6 +10,6 @@
 # volume. Built once by e2e.sh and reused; nothing about it ships.
 # Pinned by digest all the same: internal/arch's base-image test says why, and
 # Dependabot proposes the refresh (0vk.58).
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 RUN apk add --no-cache sqlite
 ENTRYPOINT ["sqlite3"]
