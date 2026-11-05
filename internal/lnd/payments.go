@@ -212,7 +212,9 @@ func (c *Client) TrackPayment(ctx context.Context, paymentHash []byte) (PaymentR
 // later finds the record — but the budget and the payer's answer do not.
 //
 // THE CODES are what grpc-go v1.83.2 itself produces when the stream breaks
-// rather than when the handler answers (read, not run):
+// rather than when the handler answers (read, not run; the line numbers below
+// are v1.83.2's). Re-read unchanged at v1.84.0 (v7u) and v1.85.0 (5 Nov 2026):
+// http2ErrConvTab and toRPCErr are byte-identical across all three.
 //
 //   - Canceled and DeadlineExceeded, and the bare context errors: our side
 //     giving up. Also what an RST_STREAM with CANCEL maps to.
