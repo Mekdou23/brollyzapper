@@ -1386,6 +1386,9 @@ type fakeInvoices struct {
 	// against exactly that.
 	filters []store.TxnFilter
 	txns    []store.Txn
+	// lookup, when set, is what Lookup answers for "hash" — a settled invoice with
+	// its proof, or an open one without (d24.28).
+	lookup *Invoice
 }
 
 func (f *fakeInvoices) Mint(_ context.Context, amountMsat int64, description string) (Invoice, error) {
@@ -1399,6 +1402,9 @@ func (f *fakeInvoices) Mint(_ context.Context, amountMsat int64, description str
 func (f *fakeInvoices) Lookup(_ context.Context, hash string) (Invoice, bool, error) {
 	if hash != "hash" {
 		return Invoice{}, false, nil
+	}
+	if f.lookup != nil {
+		return *f.lookup, true, nil
 	}
 	return Invoice{Bolt11: "lnbcrt1minted", PaymentHash: hash}, true, nil
 }

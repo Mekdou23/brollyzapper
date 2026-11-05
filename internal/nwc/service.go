@@ -15,6 +15,7 @@ import (
 	"github.com/davotoula/brollyzapper/internal/lnurl"
 	"github.com/davotoula/brollyzapper/internal/logging"
 	"github.com/davotoula/brollyzapper/internal/nostr"
+	"github.com/davotoula/brollyzapper/internal/secret"
 	"github.com/davotoula/brollyzapper/internal/store"
 )
 
@@ -46,6 +47,22 @@ type Invoice struct {
 	ExpiresAt   time.Time
 	SettledAt   time.Time
 	Settled     bool
+	// Preimage is the proof the invoice was paid, zero until it settles. NIP-47
+	// lists it on the lookup_invoice result, and it is revealed at the one line
+	// in this package that renders a proof (d24.28). Typed so that an Invoice
+	// through slog cannot leak it (§12).
+	Preimage secret.String
+}
+
+// LogValue keeps the preimage out of a log line even when a whole Invoice is
+// handed to slog (§12).
+func (i Invoice) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("payment_hash", i.PaymentHash),
+		slog.Int64("amount_msat", i.AmountMsat),
+		slog.Bool("settled", i.Settled),
+		slog.Bool("has_preimage", !i.Preimage.IsZero()),
+	)
 }
 
 // Node is the read-only node facts get_info reports.
@@ -1024,38 +1041,39 @@ func encodedSize(value any) int {
 // invoice this app paid — so ONE field answers "what was this for" whichever way
 // the money went.
 //
-// THE PREIMAGE IS REVEALED ONLY FOR THIS CONNECTION'S OWN PAYMENTS, and the
-// scoping is the whole of what makes revealing it defensible.
+// THE PREIMAGE IS REVEALED ON EVERY INCOMING ROW AND ON THIS CONNECTION'S OWN
+// PAYMENTS, and withheld — key absent — on payments other connections or the
+// operator made. Two rulings, one each way.
 //
-// The first version revealed it on every row, which review caught: the history
-// filter has no connection dimension, so a pairing holding nothing but the
-// default `history` group was handed the preimage of every zap the node had
-// EVER received and of every payment any other app or the operator had made. A
-// preimage is the proof-of-payment token — an app holding one can assert to
-// anyone that it paid an invoice it never paid. "Lets this app list payments in
-// and out" is not consent to that.
+// The first version revealed it on every row, which review caught (d24.16): the
+// history filter has no connection dimension, so a pairing holding nothing but
+// the default `history` group was handed the preimage of every payment any
+// other app or the operator had made. A preimage is the proof-of-payment token —
+// an app holding one can assert to anyone that it PAID an invoice it never
+// paid. "Lets this app list payments in and out" is not consent to that. That
+// half stands: scoping is possible because d24.15 writes nwc_connection_id on
+// the payment_out row at reserve time.
 //
-// Scoping is possible at all because d24.15 started writing nwc_connection_id,
-// which is the same column the resolver needed. Rows with no connection —
-// incoming invoices, the operator's own payments, everything written before this
-// wave — keep their proof to themselves.
+// The second version withheld INCOMING rows too, because they carry no
+// connection id, and sent "" for them (d24.28, from the Amethyst side,
+// 2026-11-05: a received zap rendered with a preimage label and no value). That
+// protected nothing. An incoming preimage proves a payment INTO this node — the
+// node minted the invoice, so it is the one party entitled to the proof, and a
+// wallet app showing it against a received payment is what every wallet does —
+// and for every zap it is already public on the kind 9735 receipt
+// (internal/zap/receipt.go). The risk the review named is the outgoing one.
 //
-// THE PREIMAGE is the empty string rather than a missing key, so a client does
-// not have to tell "not settled" from "not mine" from "this field is new"; none
-// of those is its business, and all three mean the same thing to it. The
-// description is the opposite call (doy.1) and the difference is that it has no
-// secret to keep — see below.
+// WITHHELD MEANS ABSENT, not "" (d24.28). The empty string was chosen so a client
+// need not tell "not settled" from "not mine" from "this field is new"; a client
+// rendered it anyway, exactly as it rendered the empty description doy.1
+// removed. "" is also not a preimage — it is not hex — and NIP-47 marks the
+// field optional, which is spelled absent. See revealPreimage.
 func txnResult(txn store.Txn, connectionID int64) map[string]any {
-	preimage := ""
-	if txn.NWCConnectionID != 0 && txn.NWCConnectionID == connectionID {
-		preimage = txn.Preimage.Reveal()
-	}
 	out := map[string]any{
 		"type":         txnType(txn.Kind),
 		"amount":       txn.AmountMsat,
 		"fees_paid":    txn.FeeMsat,
 		"payment_hash": txn.PaymentHash,
-		"preimage":     preimage,
 		"state":        txn.State,
 		// WHEN, which is why every row in the operator's wallet app was an
 		// undated arrow (d24.27). It was on the row the whole time;
@@ -1103,7 +1121,23 @@ func txnResult(txn store.Txn, connectionID int64) map[string]any {
 	if txn.OutDescriptionHash != "" {
 		out["description_hash"] = txn.OutDescriptionHash
 	}
+	if !outgoingKind(txn.Kind) || (txn.NWCConnectionID != 0 && txn.NWCConnectionID == connectionID) {
+		revealPreimage(out, txn.Preimage)
+	}
 	return out
+}
+
+// revealPreimage puts the proof on a row when there is one to give, and leaves
+// the key out when there is not. THE ONE LINE IN THIS FILE where a preimage
+// becomes a plain string: internal/arch counts the exits, and lookup_invoice and
+// list_transactions share this one so that NIP-47's two proof-carrying reads
+// are one exit rather than two. Callers decide WHETHER (txnResult's scoping,
+// invoiceResult's settled check); this decides only the shape — absent, never
+// "", when there is nothing to reveal (d24.28).
+func revealPreimage(out map[string]any, preimage secret.String) {
+	if proof := preimage.Reveal(); proof != "" {
+		out["preimage"] = proof
+	}
 }
 
 // zapMetadata is NIP-47's `metadata` for a row that carried a zap request, and
@@ -1207,6 +1241,7 @@ func invoiceResult(inv Invoice) map[string]any {
 	}
 	if inv.Settled {
 		out["settled_at"] = inv.SettledAt.Unix()
+		revealPreimage(out, inv.Preimage)
 	}
 	return out
 }

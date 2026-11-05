@@ -1766,9 +1766,16 @@ func checkPreimageRevealsAreTheProtocolOnes(t *testing.T, files []sourceFile) []
 // revealsIn counts needs in f's CODE. Raw source let a comment stand in for the
 // call: delete a listed reveal, keep a comment naming it, and the count stayed
 // at exactly one (`44b`).
+//
+// CASE-BLIND, the same way the rule above matches the receiver (d24.28): the
+// one reveal in internal/nwc/service.go is now on a parameter, `preimage.Reveal()`,
+// because lookup_invoice and list_transactions share it — and a count that saw
+// only the field spelling reported that file as having NO exit while the rule
+// above, which lowercases, was still counting it as one. Two rules reading one
+// call differently is the gap this closes.
 func revealsIn(t *testing.T, f sourceFile, needs string) int {
 	t.Helper()
-	return strings.Count(strings.Join(codeLines(t, f), "\n"), needs)
+	return strings.Count(strings.ToLower(strings.Join(codeLines(t, f), "\n")), strings.ToLower(needs))
 }
 
 func TestThePreimageLeavesTheTypeOnlyWhereAProtocolDemandsIt(t *testing.T) {

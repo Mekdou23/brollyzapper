@@ -250,17 +250,25 @@ func TestAnUnbookedPaymentLeavesTheBudgetCorrectionToTheResolver(t *testing.T) {
 	}
 }
 
-// list_transactions reveals a preimage ONLY for this connection's own payments.
+// list_transactions reveals a preimage on every INCOMING row and on this
+// connection's OWN payments, and withholds it — key absent — on payments other
+// connections or the operator made.
 //
-// Found by review, and it is the sharpest thing in this wave. The history filter
-// has no connection dimension — store.TxnFilter is dates, limit, offset,
-// direction and paid-state — so the first version of txnResult handed every
-// paired app the preimage of every zap the node had ever received and of every
-// payment any other app or the operator had made. A preimage is the
-// proof-of-payment token: an app holding one can assert to anyone that it paid
-// an invoice it never paid. "Lets this app list payments in and out" is not
-// consent to that, and `history` is granted by default.
-func TestListTransactionsRevealsOnlyThisConnectionsPreimages(t *testing.T) {
+// The first version revealed it on every row, which review caught (d24.16): the
+// history filter has no connection dimension, so a pairing holding nothing but
+// the default `history` group was handed the preimage of every payment any
+// other app or the operator had made. A preimage is the proof-of-payment token:
+// an app holding one can assert to anyone that it PAID an invoice it never paid.
+// "Lets this app list payments in and out" is not consent to that.
+//
+// The second version withheld incoming rows too, and sent "" for them (d24.28,
+// from the Amethyst side, 2026-11-05: a received zap rendered with a preimage
+// label and no value). That protected nothing. An incoming preimage proves a
+// payment INTO this node — the node minted the invoice and is the one party
+// entitled to its proof — and for every zap it is already public on the kind
+// 9735 receipt. The risk the review named is the outgoing one, and that half
+// still holds.
+func TestListTransactionsRevealsIncomingAndOwnPreimagesOnly(t *testing.T) {
 	h := newHarness(t)
 	mine := h.conn.row().ID
 	h.invoices.txns = []store.Txn{{
@@ -272,7 +280,8 @@ func TestListTransactionsRevealsOnlyThisConnectionsPreimages(t *testing.T) {
 		NWCConnectionID: mine + 1,
 	}, {
 		// An incoming zap: nobody's connection asked for it, and its preimage is
-		// the PAYER's proof.
+		// this NODE's proof that it was paid — which is what a wallet app shows
+		// against a received payment.
 		Kind: store.KindInvoiceIn, State: store.TxnSettled, AmountMsat: 21_000,
 		PaymentHash: "received", Preimage: secret.New("proof-of-received"),
 	}}
@@ -287,13 +296,34 @@ func TestListTransactionsRevealsOnlyThisConnectionsPreimages(t *testing.T) {
 	}
 	rendered := string(body)
 
-	if !strings.Contains(rendered, "proof-of-mine") {
-		t.Errorf("this connection's OWN payment came back without its proof:\n%s", rendered)
+	for _, own := range []string{"proof-of-mine", "proof-of-received"} {
+		if !strings.Contains(rendered, own) {
+			t.Errorf("a row this connection is entitled to came back without its proof (%s):\n%s",
+				own, rendered)
+		}
 	}
-	for _, leaked := range []string{"proof-of-theirs", "proof-of-received"} {
-		if strings.Contains(rendered, leaked) {
-			t.Errorf("a preimage this connection never earned (%s) was handed to it; it could "+
-				"assert to anyone that it made that payment:\n%s", leaked, rendered)
+	if strings.Contains(rendered, "proof-of-theirs") {
+		t.Errorf("a preimage this connection never earned was handed to it; it could "+
+			"assert to anyone that it made that payment:\n%s", rendered)
+	}
+
+	// WITHHELD MEANS ABSENT, not "". The previous shape sent an empty string so a
+	// client need not tell "not yours" from "not settled"; a client rendered it
+	// anyway — a preimage line with nothing on it — exactly as it rendered the
+	// empty description doy.1 removed. "" is also not a preimage: it is not hex.
+	var parsed struct {
+		Transactions []map[string]json.RawMessage `json:"transactions"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range parsed.Transactions {
+		if string(row["payment_hash"]) != `"theirs"` {
+			continue
+		}
+		if raw, present := row["preimage"]; present {
+			t.Errorf("another connection's row carries preimage %s; a withheld proof is a "+
+				"missing key, not an empty string", raw)
 		}
 	}
 }

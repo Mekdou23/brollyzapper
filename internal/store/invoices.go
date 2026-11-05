@@ -34,6 +34,23 @@ type Invoice struct {
 	State     string
 	CreatedAt time.Time
 	ExpiresAt time.Time
+	// Preimage is the proof this invoice was PAID, read from the settled txn (the
+	// invoices row never holds it), and zero until then. It is what NWC
+	// lookup_invoice answers with once the invoice settles (d24.28), typed so that
+	// an Invoice through slog cannot leak it (§12).
+	Preimage secret.String
+}
+
+// LogValue keeps the preimage out of a log line even when a whole Invoice is
+// handed to slog (§12). The hash identifies the invoice; the proof belongs to
+// the client that asks for it.
+func (i Invoice) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("payment_hash", shortID(i.PaymentHash)),
+		slog.Int64("amount_msat", i.AmountMsat),
+		slog.String("state", i.State),
+		slog.Bool("has_preimage", !i.Preimage.IsZero()),
+	)
 }
 
 // CreateInvoice records a freshly minted invoice.
@@ -64,11 +81,19 @@ func (s *Store) Invoice(ctx context.Context, paymentHash string) (Invoice, bool,
 		createdAt, expiresAt  int64
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT payment_hash, amount_msat, description_hash, bolt11, zap_request, zap_relays,
-		        COALESCE(comment, ''), state, created_at, expires_at
-		 FROM invoices WHERE payment_hash = ?`, paymentHash).
+		// THE PROOF COMES FROM THE SETTLED TXN, which is the only row that holds
+		// it (CreditSettledInvoice). At most one matches: migration 0008 keeps
+		// txns.payment_hash unique among invoice_in rows. Straight into the
+		// field (twt): secret.String scans NULL and '' to its zero value alike.
+		`SELECT i.payment_hash, i.amount_msat, i.description_hash, i.bolt11, i.zap_request,
+		        i.zap_relays, COALESCE(i.comment, ''), i.state, i.created_at, i.expires_at,
+		        t.preimage
+		 FROM invoices i
+		 LEFT JOIN txns t ON t.payment_hash = i.payment_hash AND t.kind = 'invoice_in'
+		 WHERE i.payment_hash = ?`, paymentHash).
 		Scan(&inv.PaymentHash, &inv.AmountMsat, &inv.DescriptionHash, &inv.Bolt11,
-			&zapRequest, &zapRelays, &inv.Comment, &inv.State, &createdAt, &expiresAt)
+			&zapRequest, &zapRelays, &inv.Comment, &inv.State, &createdAt, &expiresAt,
+			&inv.Preimage)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Invoice{}, false, nil
 	}
@@ -574,7 +599,8 @@ type Txn struct {
 	Preimage secret.String
 	// NWCConnectionID is the pairing that asked for this payment, 0 when none
 	// did. It is what lets a caller answer "is this row THIS client's?" — see
-	// nwc.txnResult, which reveals a preimage only for a connection's own rows.
+	// nwc.txnResult, which reveals an outgoing row's preimage only to the
+	// connection that paid it (incoming rows are the node's own; d24.28).
 	NWCConnectionID int64
 	CreatedAt       time.Time
 	SettledAt       time.Time

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/davotoula/brollyzapper/internal/nostr"
+	"github.com/davotoula/brollyzapper/internal/secret"
 	"github.com/davotoula/brollyzapper/internal/store"
 )
 
@@ -201,5 +202,49 @@ func TestAReplayIsFreshlySealedFromPlaintext(t *testing.T) {
 		if !strings.Contains(plaintext, "4242") {
 			t.Errorf("response %d is %q, want the balance", i, plaintext)
 		}
+	}
+}
+
+// lookup_invoice carries the preimage once the invoice has settled, and no key
+// before (d24.28).
+//
+// NIP-47 lists `preimage` on the lookup_invoice result, and this is the ONE
+// method a client that minted an invoice through make_invoice can ask for its
+// proof with — a paired app polling for "has my invoice been paid" gets the
+// settle time and the proof in the same answer. The field is absent on an open
+// invoice, not "": optional is spelled absent (doy.1).
+func TestLookupInvoiceCarriesThePreimageOnceSettled(t *testing.T) {
+	for _, c := range []struct {
+		name    string
+		invoice Invoice
+		want    string // "" means the key must be absent
+	}{
+		{"settled", Invoice{
+			Bolt11: "lnbcrt1minted", PaymentHash: "hash", Settled: true,
+			SettledAt: time.Unix(1_700_000_000, 0), Preimage: secret.New("proof-of-received"),
+		}, "proof-of-received"},
+		{"still open", Invoice{Bolt11: "lnbcrt1minted", PaymentHash: "hash"}, ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.invoices.lookup = &c.invoice
+
+			resp := h.handle(t, MethodLookupInvoice, json.RawMessage(`{"payment_hash":"hash"}`))
+			if resp.Error != nil {
+				t.Fatalf("lookup_invoice was refused: %+v", resp.Error)
+			}
+			result, ok := resp.Result.(map[string]any)
+			if !ok {
+				t.Fatalf("result is %T, want a map", resp.Result)
+			}
+			got, present := result["preimage"]
+			switch {
+			case c.want == "" && present:
+				t.Errorf("preimage = %#v on an unsettled invoice; there is no proof yet, and "+
+					"the key must be absent rather than empty", got)
+			case c.want != "" && got != c.want:
+				t.Errorf("preimage = %#v, want %q — the proof the invoice settled", got, c.want)
+			}
+		})
 	}
 }

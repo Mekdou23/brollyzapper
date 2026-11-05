@@ -220,6 +220,11 @@ func TestSettlementCreatesTheTxnAndCreditsTheBalance(t *testing.T) {
 	if got.State != store.InvoiceSettled {
 		t.Errorf("invoice state = %q, want %q", got.State, store.InvoiceSettled)
 	}
+	// AND ITS PROOF (d24.28): the settled txn holds the preimage, and a lookup of
+	// the invoice is how NWC lookup_invoice answers "was it paid, and prove it".
+	if got.Preimage != secret.New("preimage-a") {
+		t.Errorf("a settled invoice read back without its preimage; lookup_invoice cannot prove it was paid")
+	}
 }
 
 // The failure this guards against pays the wallet twice for one zap: LND

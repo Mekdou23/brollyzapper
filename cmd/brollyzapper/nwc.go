@@ -91,7 +91,8 @@ func (n nwcInvoices) Lookup(ctx context.Context, paymentHash string) (nwc.Invoic
 	return nwc.Invoice{
 		Bolt11: inv.Bolt11, PaymentHash: inv.PaymentHash, AmountMsat: inv.AmountMsat,
 		Description: inv.Comment, CreatedAt: inv.CreatedAt, ExpiresAt: inv.ExpiresAt,
-		Settled: inv.State == store.InvoiceSettled,
+		Settled:  inv.State == store.InvoiceSettled,
+		Preimage: inv.Preimage,
 	}, true, nil
 }
 
