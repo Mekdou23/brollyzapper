@@ -662,9 +662,22 @@ func TestARowWithNothingToProveHasNoPreimage(t *testing.T) {
 		{"a pending incoming row has no proof yet", store.Txn{
 			Kind: "invoice_in", State: "pending",
 		}},
+		// The != 0 clause: a row nobody's connection paid, asked about by a caller
+		// whose id is also 0. No live connection has id 0; a harness might, and
+		// "0 == 0" must not read as "mine" (review, d24.28).
+		{"an outgoing row nobody's connection paid, asked by connection 0", store.Txn{
+			Kind: "payment_out", State: "settled", Preimage: secret.New("proof-of-nobody"),
+		}},
+		// Fail closed: a kind that is neither incoming nor outgoing reveals nothing,
+		// whoever asks.
+		{"a kind the history filter does not emit today", store.Txn{
+			Kind: "adjustment", State: "settled", Preimage: secret.New("proof-of-what"),
+		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			assertOptional(t, txnResult(c.txn, 7), "preimage", nil)
+			for _, caller := range []int64{7, 0} {
+				assertOptional(t, txnResult(c.txn, caller), "preimage", nil)
+			}
 		})
 	}
 }

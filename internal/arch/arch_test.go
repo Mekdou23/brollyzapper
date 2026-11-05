@@ -1773,11 +1773,12 @@ func preimageReveals(t *testing.T, f sourceFile) []preimageReveal {
 	}
 	var out []preimageReveal
 	ast.Inspect(file, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
+		// THE SELECTOR, not the call: `preimage.Reveal` taken as a method value
+		// and handed somewhere is an exit exactly as the call is, and a walk that
+		// matched only CallExpr.Fun did not see it (review, d24.28). The method
+		// expression `secret.String.Reveal(p)` is still missed — its receiver is
+		// the type — and is left so, named here rather than pretended closed.
+		sel, ok := n.(*ast.SelectorExpr)
 		if !ok || sel.Sel.Name != "Reveal" {
 			return true
 		}
@@ -1845,8 +1846,9 @@ func (z *Zap) tags() [][]string { return nil }
 	}
 	// And the control: the call itself is counted, on a field or on a parameter.
 	for name, src := range map[string]string{
-		"a field":     "func (z *Zap) preimage() string { return z.Preimage.Reveal() }",
-		"a parameter": "func reveal(preimage secret.String) string { return preimage.Reveal() }",
+		"a field":        "func (z *Zap) preimage() string { return z.Preimage.Reveal() }",
+		"a parameter":    "func reveal(preimage secret.String) string { return preimage.Reveal() }",
+		"a method value": "func reveal(preimage secret.String) func() string { return preimage.Reveal }",
 	} {
 		if got := len(preimageReveals(t, planted("internal/zap", "package zap\n\n"+src+"\n"))); got != 1 {
 			t.Errorf("the call on %s counted as %d reveals, want 1", name, got)

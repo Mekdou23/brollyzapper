@@ -1134,11 +1134,16 @@ func txnResult(txn store.Txn, connectionID int64) map[string]any {
 // that paid it. The != 0 clause is what keeps a row nobody's connection paid —
 // the operator's, or one written before d24.15 — from matching a caller whose
 // id is also 0, which no live connection has but a test harness might.
+//
+// FAIL CLOSED: the incoming kind is named, not inferred as "whatever is not
+// outgoing". Only invoice_in and payment_out reach this today — the history
+// query's IN filter keeps the operator's ledger kinds out — but a kind the
+// filter widened to tomorrow would otherwise reveal by default (review, d24.28).
 func proofBelongsTo(txn store.Txn, connectionID int64) bool {
-	if !outgoingKind(txn.Kind) {
+	if txn.Kind == store.KindInvoiceIn {
 		return true
 	}
-	return txn.NWCConnectionID != 0 && txn.NWCConnectionID == connectionID
+	return outgoingKind(txn.Kind) && txn.NWCConnectionID != 0 && txn.NWCConnectionID == connectionID
 }
 
 // revealPreimage puts the proof on a row when there is one to give, and leaves
