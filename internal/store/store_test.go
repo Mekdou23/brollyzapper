@@ -225,6 +225,12 @@ func TestSettlementCreatesTheTxnAndCreditsTheBalance(t *testing.T) {
 	if got.Preimage != secret.New("preimage-a") {
 		t.Errorf("a settled invoice read back without its preimage; lookup_invoice cannot prove it was paid")
 	}
+	// AND WHEN. The settle time lives on the txn too, and a lookup that could not
+	// say when an invoice was paid answered NWC lookup_invoice with the zero
+	// time's Unix value, -62135596800 — found by regtest nwc.sh §17 (d24.28).
+	if !got.SettledAt.Equal(now) {
+		t.Errorf("a settled invoice read back settled at %v, want %v", got.SettledAt, now)
+	}
 }
 
 // The failure this guards against pays the wallet twice for one zap: LND

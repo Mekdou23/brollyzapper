@@ -1240,7 +1240,13 @@ func invoiceResult(inv Invoice) map[string]any {
 		out["description"] = inv.Description
 	}
 	if inv.Settled {
-		out["settled_at"] = inv.SettledAt.Unix()
+		// ONLY WHEN KNOWN. The lookup path did not carry the time until d24.28, and
+		// every settled lookup_invoice answered -62135596800 — the zero time's
+		// Unix value, year 1 — which a client renders as a date. A time this
+		// invoice cannot give is a missing key, like every other optional here.
+		if !inv.SettledAt.IsZero() {
+			out["settled_at"] = inv.SettledAt.Unix()
+		}
 		revealPreimage(out, inv.Preimage)
 	}
 	return out

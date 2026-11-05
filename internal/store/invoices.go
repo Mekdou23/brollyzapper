@@ -39,6 +39,10 @@ type Invoice struct {
 	// lookup_invoice answers with once the invoice settles (d24.28), typed so that
 	// an Invoice through slog cannot leak it (§12).
 	Preimage secret.String
+	// SettledAt is when the invoice was PAID, read from the same txn, zero until
+	// then. lookup_invoice reported the zero time's Unix value for every settled
+	// invoice before this was carried (d24.28, regtest nwc.sh §17).
+	SettledAt time.Time
 }
 
 // LogValue keeps the preimage out of a log line even when a whole Invoice is
@@ -79,6 +83,7 @@ func (s *Store) Invoice(ctx context.Context, paymentHash string) (Invoice, bool,
 		inv                   Invoice
 		zapRequest, zapRelays sql.NullString
 		createdAt, expiresAt  int64
+		settledAt             sql.NullInt64
 	)
 	err := s.db.QueryRowContext(ctx,
 		// THE PROOF COMES FROM THE SETTLED TXN, which is the only row that holds
@@ -87,13 +92,13 @@ func (s *Store) Invoice(ctx context.Context, paymentHash string) (Invoice, bool,
 		// field (twt): secret.String scans NULL and '' to its zero value alike.
 		`SELECT i.payment_hash, i.amount_msat, i.description_hash, i.bolt11, i.zap_request,
 		        i.zap_relays, COALESCE(i.comment, ''), i.state, i.created_at, i.expires_at,
-		        t.preimage
+		        t.preimage, t.settled_at
 		 FROM invoices i
 		 LEFT JOIN txns t ON t.payment_hash = i.payment_hash AND t.kind = 'invoice_in'
 		 WHERE i.payment_hash = ?`, paymentHash).
 		Scan(&inv.PaymentHash, &inv.AmountMsat, &inv.DescriptionHash, &inv.Bolt11,
 			&zapRequest, &zapRelays, &inv.Comment, &inv.State, &createdAt, &expiresAt,
-			&inv.Preimage)
+			&inv.Preimage, &settledAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Invoice{}, false, nil
 	}
@@ -104,6 +109,9 @@ func (s *Store) Invoice(ctx context.Context, paymentHash string) (Invoice, bool,
 	inv.ZapRelays = zapRelays.String
 	inv.CreatedAt = unixTime(createdAt)
 	inv.ExpiresAt = unixTime(expiresAt)
+	if settledAt.Valid {
+		inv.SettledAt = unixTime(settledAt.Int64)
+	}
 	return inv, true, nil
 }
 

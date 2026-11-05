@@ -248,3 +248,36 @@ func TestLookupInvoiceCarriesThePreimageOnceSettled(t *testing.T) {
 		})
 	}
 }
+
+// A settled invoice says WHEN it settled, and only when it knows (d24.28, from
+// regtest nwc.sh §17).
+//
+// invoiceResult emitted settled_at for every settled invoice, and the lookup
+// path never populated the time — the store read did not carry it and the
+// adapter did not map it — so every settled lookup_invoice answered
+// settled_at: -62135596800, the zero time's Unix value, year 1. The row below
+// is the real fixture: a settled invoice whose time the caller did not supply
+// must leave the key out rather than assert a date before Lightning existed.
+func TestASettledInvoiceSaysWhenItSettled(t *testing.T) {
+	settledAt := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		name    string
+		invoice Invoice
+		want    any // nil means the key must be absent
+	}{
+		{"settled, time known", Invoice{Settled: true, SettledAt: settledAt}, settledAt.Unix()},
+		{"settled, time unknown", Invoice{Settled: true}, nil},
+		{"open", Invoice{}, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, present := invoiceResult(c.invoice)["settled_at"]
+			switch {
+			case c.want == nil && present:
+				t.Errorf("settled_at = %#v; a time this invoice does not know is a missing key, "+
+					"not the zero time", got)
+			case c.want != nil && got != c.want:
+				t.Errorf("settled_at = %#v, want %v", got, c.want)
+			}
+		})
+	}
+}
