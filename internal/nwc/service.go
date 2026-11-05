@@ -45,8 +45,10 @@ type Invoice struct {
 	Description string
 	CreatedAt   time.Time
 	ExpiresAt   time.Time
-	SettledAt   time.Time
-	Settled     bool
+	// SettledAt is when the invoice was PAID, and zero until it is: settlement is
+	// this field being set, not a second flag beside it (d24.28 dropped the
+	// flag — two fields that could disagree, and a test fixture that made them).
+	SettledAt time.Time
 	// Preimage is the proof the invoice was paid, zero until it settles. NIP-47
 	// lists it on the lookup_invoice result, and it is revealed at the one line
 	// in this package that renders a proof (d24.28). Typed so that an Invoice
@@ -58,9 +60,9 @@ type Invoice struct {
 // handed to slog (§12).
 func (i Invoice) LogValue() slog.Value {
 	return slog.GroupValue(
-		slog.String("payment_hash", i.PaymentHash),
+		slog.String("payment_hash", logging.Short(i.PaymentHash)),
 		slog.Int64("amount_msat", i.AmountMsat),
-		slog.Bool("settled", i.Settled),
+		slog.Bool("settled", !i.SettledAt.IsZero()),
 		slog.Bool("has_preimage", !i.Preimage.IsZero()),
 	)
 }
@@ -1121,10 +1123,22 @@ func txnResult(txn store.Txn, connectionID int64) map[string]any {
 	if txn.OutDescriptionHash != "" {
 		out["description_hash"] = txn.OutDescriptionHash
 	}
-	if !outgoingKind(txn.Kind) || (txn.NWCConnectionID != 0 && txn.NWCConnectionID == connectionID) {
+	if proofBelongsTo(txn, connectionID) {
 		revealPreimage(out, txn.Preimage)
 	}
 	return out
+}
+
+// proofBelongsTo is the scoping rule txnResult's comment argues: an incoming
+// row's proof is the node's own, an outgoing row's belongs to the connection
+// that paid it. The != 0 clause is what keeps a row nobody's connection paid —
+// the operator's, or one written before d24.15 — from matching a caller whose
+// id is also 0, which no live connection has but a test harness might.
+func proofBelongsTo(txn store.Txn, connectionID int64) bool {
+	if !outgoingKind(txn.Kind) {
+		return true
+	}
+	return txn.NWCConnectionID != 0 && txn.NWCConnectionID == connectionID
 }
 
 // revealPreimage puts the proof on a row when there is one to give, and leaves
@@ -1239,16 +1253,15 @@ func invoiceResult(inv Invoice) map[string]any {
 	if inv.Description != "" {
 		out["description"] = inv.Description
 	}
-	if inv.Settled {
-		// ONLY WHEN KNOWN. The lookup path did not carry the time until d24.28, and
-		// every settled lookup_invoice answered -62135596800 — the zero time's
-		// Unix value, year 1 — which a client renders as a date. A time this
-		// invoice cannot give is a missing key, like every other optional here.
-		if !inv.SettledAt.IsZero() {
-			out["settled_at"] = inv.SettledAt.Unix()
-		}
-		revealPreimage(out, inv.Preimage)
+	// ONLY WHEN SETTLED, which is the time being set. The lookup path did not
+	// carry the time until d24.28 and emitted the field on a flag instead, so
+	// every settled lookup_invoice answered -62135596800 — the zero time's Unix
+	// value, year 1 — which a client renders as a date. The preimage is zero
+	// until the same moment, and revealPreimage omits a zero.
+	if !inv.SettledAt.IsZero() {
+		out["settled_at"] = inv.SettledAt.Unix()
 	}
+	revealPreimage(out, inv.Preimage)
 	return out
 }
 

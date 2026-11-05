@@ -113,7 +113,7 @@ func redactionSubjects(t *testing.T) map[string]subject {
 	// carrying it: the store read joins it from the settled txn, and the nwc shape
 	// is what the adapter hands the service.
 	storeInv := store.Invoice{PaymentHash: strings.Repeat("c", 64), AmountMsat: 21_000, State: store.InvoiceSettled, Preimage: secret.New(sentinel + "-store-invoice-preimage")}
-	nwcInv := nwc.Invoice{PaymentHash: strings.Repeat("d", 64), AmountMsat: 21_000, Settled: true, Preimage: secret.New(sentinel + "-nwc-invoice-preimage")}
+	nwcInv := nwc.Invoice{PaymentHash: strings.Repeat("d", 64), AmountMsat: 21_000, SettledAt: time.Unix(1_700_000_000, 0), Preimage: secret.New(sentinel + "-nwc-invoice-preimage")}
 
 	// Hand-kept, and it is the arch rule TestEverySecretBearingStructRedactsItself
 	// that stops it narrowing silently: that rule fails when a struct gains a

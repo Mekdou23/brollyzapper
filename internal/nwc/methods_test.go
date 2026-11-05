@@ -205,25 +205,40 @@ func TestAReplayIsFreshlySealedFromPlaintext(t *testing.T) {
 	}
 }
 
+// assertOptional is the doy.1 doctrine as one assertion: an optional field is
+// PRESENT with its value, or ABSENT — never present and empty, which a client
+// renders as an occupied line showing nothing. want == nil means absent.
+func assertOptional(t *testing.T, row map[string]any, key string, want any) {
+	t.Helper()
+	got, present := row[key]
+	switch {
+	case want == nil && present:
+		t.Errorf("%s = %#v; a value this row cannot give is a missing key, not an empty one", key, got)
+	case want != nil && !present:
+		t.Errorf("%s is absent, want %v", key, want)
+	case want != nil && got != want:
+		t.Errorf("%s = %#v, want %v", key, got, want)
+	}
+}
+
 // lookup_invoice carries the preimage once the invoice has settled, and no key
 // before (d24.28).
 //
 // NIP-47 lists `preimage` on the lookup_invoice result, and this is the ONE
 // method a client that minted an invoice through make_invoice can ask for its
 // proof with — a paired app polling for "has my invoice been paid" gets the
-// settle time and the proof in the same answer. The field is absent on an open
-// invoice, not "": optional is spelled absent (doy.1).
+// settle time and the proof in the same answer.
 func TestLookupInvoiceCarriesThePreimageOnceSettled(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		invoice Invoice
-		want    string // "" means the key must be absent
+		want    any // nil: the key must be absent
 	}{
 		{"settled", Invoice{
-			Bolt11: "lnbcrt1minted", PaymentHash: "hash", Settled: true,
+			Bolt11: "lnbcrt1minted", PaymentHash: "hash",
 			SettledAt: time.Unix(1_700_000_000, 0), Preimage: secret.New("proof-of-received"),
 		}, "proof-of-received"},
-		{"still open", Invoice{Bolt11: "lnbcrt1minted", PaymentHash: "hash"}, ""},
+		{"still open", Invoice{Bolt11: "lnbcrt1minted", PaymentHash: "hash"}, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t)
@@ -237,47 +252,21 @@ func TestLookupInvoiceCarriesThePreimageOnceSettled(t *testing.T) {
 			if !ok {
 				t.Fatalf("result is %T, want a map", resp.Result)
 			}
-			got, present := result["preimage"]
-			switch {
-			case c.want == "" && present:
-				t.Errorf("preimage = %#v on an unsettled invoice; there is no proof yet, and "+
-					"the key must be absent rather than empty", got)
-			case c.want != "" && got != c.want:
-				t.Errorf("preimage = %#v, want %q — the proof the invoice settled", got, c.want)
-			}
+			assertOptional(t, result, "preimage", c.want)
 		})
 	}
 }
 
-// A settled invoice says WHEN it settled, and only when it knows (d24.28, from
-// regtest nwc.sh §17).
+// A settled invoice says WHEN it settled, and an open one says nothing (d24.28,
+// from regtest nwc.sh §17).
 //
-// invoiceResult emitted settled_at for every settled invoice, and the lookup
-// path never populated the time — the store read did not carry it and the
-// adapter did not map it — so every settled lookup_invoice answered
-// settled_at: -62135596800, the zero time's Unix value, year 1. The row below
-// is the real fixture: a settled invoice whose time the caller did not supply
-// must leave the key out rather than assert a date before Lightning existed.
+// invoiceResult emitted settled_at on a Settled flag, and the lookup path never
+// populated the time — the store read did not carry it and the adapter did not
+// map it — so every settled lookup_invoice answered settled_at: -62135596800,
+// the zero time's Unix value, year 1. The flag is gone: settlement IS the time
+// being set, so the two can no longer disagree.
 func TestASettledInvoiceSaysWhenItSettled(t *testing.T) {
 	settledAt := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
-	for _, c := range []struct {
-		name    string
-		invoice Invoice
-		want    any // nil means the key must be absent
-	}{
-		{"settled, time known", Invoice{Settled: true, SettledAt: settledAt}, settledAt.Unix()},
-		{"settled, time unknown", Invoice{Settled: true}, nil},
-		{"open", Invoice{}, nil},
-	} {
-		t.Run(c.name, func(t *testing.T) {
-			got, present := invoiceResult(c.invoice)["settled_at"]
-			switch {
-			case c.want == nil && present:
-				t.Errorf("settled_at = %#v; a time this invoice does not know is a missing key, "+
-					"not the zero time", got)
-			case c.want != nil && got != c.want:
-				t.Errorf("settled_at = %#v, want %v", got, c.want)
-			}
-		})
-	}
+	assertOptional(t, invoiceResult(Invoice{SettledAt: settledAt}), "settled_at", settledAt.Unix())
+	assertOptional(t, invoiceResult(Invoice{}), "settled_at", nil)
 }

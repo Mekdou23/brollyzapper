@@ -13,9 +13,10 @@ import (
 	"github.com/davotoula/brollyzapper/internal/secret"
 )
 
-// Invoice is the pre-settlement record of an inbound invoice (spec §4). It is
-// the only place an unpaid invoice exists; once it settles, a txns row of kind
-// invoice_in carries it.
+// Invoice is the record of an inbound invoice (spec §4). It is the only place an
+// unpaid invoice exists; once it settles, a txns row of kind invoice_in carries
+// the settlement, and a read of the invoice joins that row for its proof and
+// its time (d24.28).
 type Invoice struct {
 	PaymentHash     string
 	AmountMsat      int64
@@ -78,6 +79,19 @@ func (s *Store) CreateInvoice(ctx context.Context, inv Invoice) error {
 }
 
 // Invoice reads one invoice by payment hash.
+// invoiceLookupSQL is one invoice with its settlement. THE PROOF AND THE TIME
+// COME FROM THE SETTLED TXN, which is the only row that holds them
+// (CreditSettledInvoice); at most one matches, because migration 0008 keeps
+// txns.payment_hash unique among invoice_in rows, and the join term names that
+// kind so the planner can use the partial index — asserted as a plan, not an
+// index, in migrate_internal_test.go (§13).
+const invoiceLookupSQL = `SELECT i.payment_hash, i.amount_msat, i.description_hash, i.bolt11,
+	        i.zap_request, i.zap_relays, COALESCE(i.comment, ''), i.state, i.created_at,
+	        i.expires_at, t.preimage, t.settled_at
+	   FROM invoices i
+	   LEFT JOIN txns t ON t.payment_hash = i.payment_hash AND t.kind = 'invoice_in'
+	  WHERE i.payment_hash = ?`
+
 func (s *Store) Invoice(ctx context.Context, paymentHash string) (Invoice, bool, error) {
 	var (
 		inv                   Invoice
@@ -85,17 +99,9 @@ func (s *Store) Invoice(ctx context.Context, paymentHash string) (Invoice, bool,
 		createdAt, expiresAt  int64
 		settledAt             sql.NullInt64
 	)
-	err := s.db.QueryRowContext(ctx,
-		// THE PROOF COMES FROM THE SETTLED TXN, which is the only row that holds
-		// it (CreditSettledInvoice). At most one matches: migration 0008 keeps
-		// txns.payment_hash unique among invoice_in rows. Straight into the
-		// field (twt): secret.String scans NULL and '' to its zero value alike.
-		`SELECT i.payment_hash, i.amount_msat, i.description_hash, i.bolt11, i.zap_request,
-		        i.zap_relays, COALESCE(i.comment, ''), i.state, i.created_at, i.expires_at,
-		        t.preimage, t.settled_at
-		 FROM invoices i
-		 LEFT JOIN txns t ON t.payment_hash = i.payment_hash AND t.kind = 'invoice_in'
-		 WHERE i.payment_hash = ?`, paymentHash).
+	// Straight into the field (twt): secret.String scans NULL and '' to its
+	// zero value alike.
+	err := s.db.QueryRowContext(ctx, invoiceLookupSQL, paymentHash).
 		Scan(&inv.PaymentHash, &inv.AmountMsat, &inv.DescriptionHash, &inv.Bolt11,
 			&zapRequest, &zapRelays, &inv.Comment, &inv.State, &createdAt, &expiresAt,
 			&inv.Preimage, &settledAt)

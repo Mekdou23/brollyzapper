@@ -401,3 +401,18 @@ func rebuilds(sql string) bool {
 	upper := strings.ToUpper(sql)
 	return strings.Contains(upper, "DROP TABLE") || strings.Contains(upper, "RENAME TO")
 }
+
+// d24.28, §13: the invoice lookup's join to its settlement is two point lookups,
+// not a scan of every txn the node has ever recorded. The ON term names the
+// kind so sqlite can take the partial unique index 0008 scoped to invoice_in;
+// drop the term and the plan degrades to a scan while every lookup test still
+// passes, which is why the plan is asserted and not the index.
+func TestTheInvoiceLookupJoinsItsSettlementThroughTheIndex(t *testing.T) {
+	plan := queryPlan(t, openStore(t), invoiceLookupSQL, "hash")
+	if !strings.Contains(plan, "idx_txns_invoice_hash") {
+		t.Errorf("the invoice lookup does not join txns through its index. Plan:\n%s", plan)
+	}
+	if strings.Contains(plan, "SCAN t") {
+		t.Errorf("the invoice lookup scans txns. Plan:\n%s", plan)
+	}
+}

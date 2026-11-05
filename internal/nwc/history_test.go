@@ -664,11 +664,7 @@ func TestARowWithNothingToProveHasNoPreimage(t *testing.T) {
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			row := txnResult(c.txn, 7)
-			if got, present := row["preimage"]; present {
-				t.Errorf("preimage = %#v; a proof this row cannot give is a missing key, "+
-					"not an empty string", got)
-			}
+			assertOptional(t, txnResult(c.txn, 7), "preimage", nil)
 		})
 	}
 }

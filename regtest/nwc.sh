@@ -1016,10 +1016,18 @@ say "17. d24.28: a received payment carries its proof, and it is the node's"
 # it is the preimage LND settled with; and sha256 of it is the payment hash —
 # which is what makes it a proof at all, and what "" can never be.
 #
-# The fixture is this section's own: the smoke arc settles an incoming zap the
-# way a stranger's wallet does, through the LNURL callback and the payer node.
-./smoke.sh >/dev/null 2>&1 || die "the smoke arc would not settle an incoming zap"
-RECV_HASH=$(sql "SELECT payment_hash FROM txns WHERE kind = 'invoice_in' AND state = 'settled' ORDER BY id DESC LIMIT 1;")
+# ANY settled incoming payment will do — the claims are about the shape of the
+# answer, not about which zap. Section 6 and every ensure_ledger top-up settle
+# one through the smoke arc, so by here there is one; the arc runs again only if
+# there is not, which is what keeps this section order-independent without
+# paying for a zap it does not need (ensure_ledger's own shape).
+settled_incoming() { sql "SELECT payment_hash FROM txns WHERE kind = 'invoice_in' AND state = 'settled' ORDER BY id DESC LIMIT 1;"; }
+RECV_HASH=$(settled_incoming)
+if [ ${#RECV_HASH} != 64 ]; then
+  note "no settled incoming payment in the ledger yet; zapping to make one"
+  ./smoke.sh >/dev/null 2>&1 || die "the smoke arc would not settle an incoming zap"
+  RECV_HASH=$(settled_incoming)
+fi
 [ ${#RECV_HASH} = 64 ] || die "no settled incoming payment in the ledger to ask about (got '$RECV_HASH')"
 
 OUT=$(nwc -service "$SERVICE_PK" -secret "$CLIENT_SK" -method lookup_invoice \
@@ -1036,10 +1044,10 @@ NODE_PROOF=$(lncli_recv lookupinvoice "$RECV_HASH" | jq -r .r_preimage)
 [ ${#NODE_PROOF} = 64 ] || die "the node has no preimage for $RECV_HASH: it did not settle this invoice"
 [ "$RECV_PROOF" = "$NODE_PROOF" ] \
   || die "lookup_invoice answered ${RECV_PROOF:0:8}… but the node settled with ${NODE_PROOF:0:8}…; the app is not reporting what LND holds"
-# AND IT HASHES TO THE PAYMENT HASH. perl turns the hex into bytes on the host
-# — present on macOS and the CI runner alike — and the digest is taken in the
-# container, where sha256_hex already lives for the same portability reason.
-HASHED=$(perl -e 'print pack "H*", $ARGV[0]' "$RECV_PROOF" | sha256_hex)
+# AND IT HASHES TO THE PAYMENT HASH. xxd turns the hex into bytes on the host,
+# the same tool e2e.sh and client-check.sh already lean on there; the digest is
+# taken in the container, where sha256_hex lives for portability.
+HASHED=$(printf '%s' "$RECV_PROOF" | xxd -r -p | sha256_hex)
 [ "$HASHED" = "$RECV_HASH" ] \
   || die "sha256(preimage) = $HASHED, want the payment hash $RECV_HASH; whatever this is, it is not the proof"
 ok "lookup_invoice carries the preimage LND settled with (${RECV_PROOF:0:8}…), and it hashes to the payment hash"

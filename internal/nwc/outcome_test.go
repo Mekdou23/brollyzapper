@@ -252,22 +252,9 @@ func TestAnUnbookedPaymentLeavesTheBudgetCorrectionToTheResolver(t *testing.T) {
 
 // list_transactions reveals a preimage on every INCOMING row and on this
 // connection's OWN payments, and withholds it — key absent — on payments other
-// connections or the operator made.
-//
-// The first version revealed it on every row, which review caught (d24.16): the
-// history filter has no connection dimension, so a pairing holding nothing but
-// the default `history` group was handed the preimage of every payment any
-// other app or the operator had made. A preimage is the proof-of-payment token:
-// an app holding one can assert to anyone that it PAID an invoice it never paid.
-// "Lets this app list payments in and out" is not consent to that.
-//
-// The second version withheld incoming rows too, and sent "" for them (d24.28,
-// from the Amethyst side, 2026-11-05: a received zap rendered with a preimage
-// label and no value). That protected nothing. An incoming preimage proves a
-// payment INTO this node — the node minted the invoice and is the one party
-// entitled to its proof — and for every zap it is already public on the kind
-// 9735 receipt. The risk the review named is the outgoing one, and that half
-// still holds.
+// connections or the operator made. The two rulings and their reasons are on
+// txnResult; this pins them, one row each, and pins that "withheld" is spelled
+// absent rather than "" (d24.16, d24.28).
 func TestListTransactionsRevealsIncomingAndOwnPreimagesOnly(t *testing.T) {
 	h := newHarness(t)
 	mine := h.conn.row().ID
@@ -290,42 +277,31 @@ func TestListTransactionsRevealsIncomingAndOwnPreimagesOnly(t *testing.T) {
 	if resp.Error != nil {
 		t.Fatalf("list_transactions was refused: %+v", resp.Error)
 	}
+	// Through JSON, as the client reads it: the map's value types are what the
+	// wire carries, and an absent key is absent on the wire too.
 	body, err := json.Marshal(resp.Result)
 	if err != nil {
 		t.Fatal(err)
 	}
-	rendered := string(body)
-
-	for _, own := range []string{"proof-of-mine", "proof-of-received"} {
-		if !strings.Contains(rendered, own) {
-			t.Errorf("a row this connection is entitled to came back without its proof (%s):\n%s",
-				own, rendered)
-		}
-	}
-	if strings.Contains(rendered, "proof-of-theirs") {
-		t.Errorf("a preimage this connection never earned was handed to it; it could "+
-			"assert to anyone that it made that payment:\n%s", rendered)
-	}
-
-	// WITHHELD MEANS ABSENT, not "". The previous shape sent an empty string so a
-	// client need not tell "not yours" from "not settled"; a client rendered it
-	// anyway — a preimage line with nothing on it — exactly as it rendered the
-	// empty description doy.1 removed. "" is also not a preimage: it is not hex.
 	var parsed struct {
-		Transactions []map[string]json.RawMessage `json:"transactions"`
+		Transactions []map[string]any `json:"transactions"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
 		t.Fatal(err)
 	}
+	rows := map[string]map[string]any{}
 	for _, row := range parsed.Transactions {
-		if string(row["payment_hash"]) != `"theirs"` {
-			continue
-		}
-		if raw, present := row["preimage"]; present {
-			t.Errorf("another connection's row carries preimage %s; a withheld proof is a "+
-				"missing key, not an empty string", raw)
-		}
+		rows[row["payment_hash"].(string)] = row
 	}
+	if len(rows) != 3 {
+		t.Fatalf("got %d rows, want 3:\n%s", len(rows), body)
+	}
+
+	assertOptional(t, rows["mine"], "preimage", "proof-of-mine")
+	assertOptional(t, rows["received"], "preimage", "proof-of-received")
+	// Absent, not "": a withheld proof must not read as an occupied, empty line,
+	// and the other connection must not be able to assert it made this payment.
+	assertOptional(t, rows["theirs"], "preimage", nil)
 }
 
 // The invoice memo this app STORES is bounded.
