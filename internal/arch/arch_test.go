@@ -1728,47 +1728,70 @@ func checkPreimageRevealsAreTheProtocolOnes(t *testing.T, files []sourceFile) []
 		"internal/nwc/service.go": "NIP-47's lookup_invoice and list_transactions",
 	}
 	var found []problem
-	fset := token.NewFileSet()
 	for _, f := range files {
-		file, err := parser.ParseFile(fset, f.path, f.src, parser.SkipObjectResolution)
-		if err != nil {
-			t.Fatalf("parsing %s: %v", f.rel, err)
+		if _, ok := allowed[f.rel]; ok {
+			continue
 		}
-		ast.Inspect(file, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok || sel.Sel.Name != "Reveal" {
-				return true
-			}
-			// The thing being revealed, as written: `z.Preimage`, `result.Preimage`.
-			if !strings.Contains(strings.ToLower(typeString(sel.X)), "preimage") {
-				return true
-			}
-			if _, ok := allowed[f.rel]; ok {
-				return true
-			}
-			found = append(found, problem{f.rel, fset.Position(sel.Pos()).Line,
+		for _, r := range preimageReveals(t, f) {
+			found = append(found, problem{f.rel, r.line,
 				fmt.Sprintf("%s reveals a preimage; the plain string exists in exactly three "+
 					"places, each because a protocol requires it (NIP-57's receipt tag, "+
 					"NIP-47's pay_invoice result, NIP-47's lookup and list). A fourth is a "+
 					"decision to take deliberately, not a convenience (twt)",
-					typeString(sel.X)+".Reveal()")})
-			return true
-		})
+					r.receiver+".Reveal()")})
+		}
 	}
 	slices.SortFunc(found, func(a, b problem) int { return strings.Compare(a.String(), b.String()) })
 	return found
 }
 
-// revealsIn counts needs in f's CODE. Raw source let a comment stand in for the
-// call: delete a listed reveal, keep a comment naming it, and the count stayed
-// at exactly one (`44b`).
-func revealsIn(t *testing.T, f sourceFile, needs string) int {
+// preimageReveal is one place a preimage becomes a plain string again: the
+// line, and the receiver as written (`z.Preimage`, `preimage`).
+type preimageReveal struct {
+	line     int
+	receiver string
+}
+
+// preimageReveals is THE ONE READER for both halves of the rule (d24.28): the
+// allow-list check above and the per-file count in the test both ask it, so
+// "which files may reveal" and "how many reveals each holds" are the same
+// claim by construction. They used to be two — an AST walk here and a text
+// count of `Preimage.Reveal()` over the code lines in the test — and the two
+// read one call differently the day the reveal moved onto a parameter spelled
+// `preimage`: the walk, which lowercases, still counted it; the text count
+// reported the file as having no exit at all.
+//
+// A comment is not an AST node, so the `44b` case — the listed reveal deleted
+// and a comment naming it left behind — is zero reveals here without a second
+// mechanism to make it so.
+func preimageReveals(t *testing.T, f sourceFile) []preimageReveal {
 	t.Helper()
-	return strings.Count(strings.Join(codeLines(t, f), "\n"), needs)
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, f.path, f.src, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", f.rel, err)
+	}
+	var out []preimageReveal
+	ast.Inspect(file, func(n ast.Node) bool {
+		// THE SELECTOR, not the call: `preimage.Reveal` taken as a method value
+		// and handed somewhere is an exit exactly as the call is, and a walk that
+		// matched only CallExpr.Fun did not see it (review, d24.28). The method
+		// expression `secret.String.Reveal(p)` is still missed — its receiver is
+		// the type — and is left so, named here rather than pretended closed.
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "Reveal" {
+			return true
+		}
+		// The thing being revealed, as written: `z.Preimage`, `result.Preimage`,
+		// `preimage`.
+		recv := typeString(sel.X)
+		if !strings.Contains(strings.ToLower(recv), "preimage") {
+			return true
+		}
+		out = append(out, preimageReveal{fset.Position(sel.Pos()).Line, recv})
+		return true
+	})
+	return out
 }
 
 func TestThePreimageLeavesTheTypeOnlyWhereAProtocolDemandsIt(t *testing.T) {
@@ -1788,25 +1811,25 @@ func (s *Store) settle(preimage secret.String) {
 	// green. Each is asserted to contain the reveal it is listed for, so deleting
 	// one and leaving the entry behind is caught — the stale-exemption failure
 	// this repo has paid for on markers and on skip lists.
-	for _, c := range []struct{ file, needs string }{
-		{"internal/zap/receipt.go", "Preimage.Reveal()"},
-		{"internal/nwc/pay.go", "Preimage.Reveal()"},
-		{"internal/nwc/service.go", "Preimage.Reveal()"},
+	for _, file := range []string{
+		"internal/zap/receipt.go",
+		"internal/nwc/pay.go",
+		"internal/nwc/service.go",
 	} {
-		t.Run(c.file, func(t *testing.T) {
-			i := slices.IndexFunc(sourceFiles(t), func(f sourceFile) bool { return f.rel == c.file })
+		t.Run(file, func(t *testing.T) {
+			i := slices.IndexFunc(sourceFiles(t), func(f sourceFile) bool { return f.rel == file })
 			if i < 0 {
-				t.Fatalf("%s is not in the module any more; this rule's list is stale", c.file)
+				t.Fatalf("%s is not in the module any more; this rule's list is stale", file)
 			}
 			// COUNTED, not merely present. The list bounds FILES; the rule's own
 			// comment claims to inventory CALL SITES, and a fourth reveal added
 			// inside internal/nwc/service.go — the likeliest place, since it
 			// already handles preimages — would be invisible to a Contains. This
 			// is what makes the two claims the same claim.
-			if got := revealsIn(t, sourceFiles(t)[i], c.needs); got != 1 {
-				t.Errorf("%s contains %d %s, want exactly 1. The allowed list bounds files; "+
-					"this is what bounds exits, and a second reveal in an allowed file is "+
-					"still a fourth exit", c.file, got, c.needs)
+			if got := len(preimageReveals(t, sourceFiles(t)[i])); got != 1 {
+				t.Errorf("%s contains %d preimage reveals, want exactly 1. The allowed list "+
+					"bounds files; this is what bounds exits, and a second reveal in an "+
+					"allowed file is still a fourth exit", file, got)
 			}
 		})
 	}
@@ -1814,20 +1837,24 @@ func (s *Store) settle(preimage secret.String) {
 	// THE COUNT IS OF CODE (`44b`): the listed reveal deleted and a comment
 	// naming it left behind is zero reveals, not one — the stale exemption the
 	// count exists to catch, dressed as the call.
-	if got := revealsIn(t, planted("internal/zap", `package zap
+	if got := len(preimageReveals(t, planted("internal/zap", `package zap
 
 // The receipt carries z.Preimage.Reveal() when the payer supplied one.
 func (z *Zap) tags() [][]string { return nil }
-`), "Preimage.Reveal()"); got != 0 {
+`))); got != 0 {
 		t.Errorf("a comment naming Preimage.Reveal() counted as %d reveals, want 0; a deleted "+
 			"exit would still read as present", got)
 	}
-	// And the control: the call itself is counted.
-	if got := revealsIn(t, planted("internal/zap", `package zap
-
-func (z *Zap) preimage() string { return z.Preimage.Reveal() }
-`), "Preimage.Reveal()"); got != 1 {
-		t.Errorf("the call z.Preimage.Reveal() counted as %d reveals, want 1", got)
+	// And the control: the call itself is counted, on a field, and so is the
+	// method value — a Reveal handed on uncalled is still an exit. (The call on
+	// a parameter is the catches plant above.)
+	for name, src := range map[string]string{
+		"a field":        "func (z *Zap) preimage() string { return z.Preimage.Reveal() }",
+		"a method value": "func reveal(preimage secret.String) func() string { return preimage.Reveal }",
+	} {
+		if got := len(preimageReveals(t, planted("internal/zap", "package zap\n\n"+src+"\n"))); got != 1 {
+			t.Errorf("the call on %s counted as %d reveals, want 1", name, got)
+		}
 	}
 }
 

@@ -735,7 +735,11 @@ ok "and its description: $PAID_DESC"
 OUT=$(nwc -service "$SERVICE_PK" -secret "$CLIENT_SK" -method list_transactions \
         -params '{"type":"outgoing","limit":5}' -timeout 20s) \
   || die "list_transactions got no answer"
-printf '%s' "$OUT" | jq -e '[.result.transactions[] | select(.preimage != "")] | length > 0' >/dev/null \
+# PRESENT AND NON-EMPTY. A withheld proof is now an ABSENT key (d24.28), and
+# jq reads a missing key as null — so `.preimage != ""` alone is true of every
+# row that has no preimage at all, and this line would pass against a page
+# carrying none.
+printf '%s' "$OUT" | jq -e '[.result.transactions[] | select(.preimage != null and .preimage != "")] | length > 0' >/dev/null \
   || die "list_transactions returned no preimage on any outgoing row: $OUT"
 printf '%s' "$OUT" | jq -e '[.result.transactions[] | select(.description != "")] | length > 0' >/dev/null \
   || die "list_transactions returned no description on any outgoing row: $OUT"
@@ -997,5 +1001,66 @@ PAID=$(lncli_payer listinvoices | jq -r \
   '.invoices[] | select(.memo == "v7u after self-payment") | .state' | tail -1)
 [ "$PAID" = "SETTLED" ] || die "the payee node reports the follow-up invoice as $PAID, not SETTLED"
 ok "an ordinary payment after the self-zap settled"
+
+# ---------------------------------------------------------------------------
+say "17. d24.28: a received payment carries its proof, and it is the node's"
+# A settled incoming zap came back from list_transactions with "preimage": ""
+# and lookup_invoice never sent the field (d24.28, from the Amethyst side; the
+# rulings are on nwc.txnResult). Three claims against a real node, because each
+# could pass at unit level on a value the app made up: both reads carry the
+# proof on a settled incoming row; it is the preimage LND settled with; and
+# sha256 of it is the payment hash — which is what makes it a proof at all, and
+# what "" can never be.
+#
+# ANY settled incoming payment will do — the claims are about the shape of the
+# answer, not about which zap. Section 6 and every ensure_ledger top-up settle
+# one through the smoke arc, so by here there is one; the arc runs again only if
+# there is not, which is what keeps this section order-independent without
+# paying for a zap it does not need (ensure_ledger's own shape).
+settled_incoming() { sql "SELECT payment_hash FROM txns WHERE kind = 'invoice_in' AND state = 'settled' ORDER BY id DESC LIMIT 1;"; }
+RECV_HASH=$(settled_incoming)
+if [ ${#RECV_HASH} != 64 ]; then
+  note "no settled incoming payment in the ledger yet; zapping to make one"
+  ./smoke.sh >/dev/null 2>&1 || die "the smoke arc would not settle an incoming zap"
+  RECV_HASH=$(settled_incoming)
+fi
+[ ${#RECV_HASH} = 64 ] || die "no settled incoming payment in the ledger to ask about (got '$RECV_HASH')"
+
+OUT=$(nwc -service "$SERVICE_PK" -secret "$CLIENT_SK" -method lookup_invoice \
+        -params "{\"payment_hash\":\"$RECV_HASH\"}" -timeout 20s) \
+  || die "lookup_invoice got no answer: $(tail -3 "$WORK/client.err")"
+RECV_PROOF=$(printf '%s' "$OUT" | jq -r '.result.preimage // empty')
+[ ${#RECV_PROOF} = 64 ] \
+  || die "lookup_invoice on a settled incoming payment answered $OUT, want a 64-character preimage; the report's \"\" was this field"
+printf '%s' "$OUT" | jq -e '.result.settled_at > 0' >/dev/null \
+  || die "lookup_invoice carries a preimage but no settled_at: $OUT"
+# THE NODE'S OWN COPY, which is the only thing a preimage can be checked
+# against from outside the app.
+NODE_PROOF=$(lncli_recv lookupinvoice "$RECV_HASH" | jq -r .r_preimage)
+[ ${#NODE_PROOF} = 64 ] || die "the node has no preimage for $RECV_HASH: it did not settle this invoice"
+[ "$RECV_PROOF" = "$NODE_PROOF" ] \
+  || die "lookup_invoice answered ${RECV_PROOF:0:8}… but the node settled with ${NODE_PROOF:0:8}…; the app is not reporting what LND holds"
+# AND IT HASHES TO THE PAYMENT HASH. xxd turns the hex into bytes on the host,
+# the same tool e2e.sh and client-check.sh already lean on there; the digest is
+# taken in the container, where sha256_hex lives for portability.
+HASHED=$(printf '%s' "$RECV_PROOF" | xxd -r -p | sha256_hex)
+[ "$HASHED" = "$RECV_HASH" ] \
+  || die "sha256(preimage) = $HASHED, want the payment hash $RECV_HASH; whatever this is, it is not the proof"
+ok "lookup_invoice carries the preimage LND settled with (${RECV_PROOF:0:8}…), and it hashes to the payment hash"
+
+# list_transactions: the same row, the same proof — the incoming side, which is
+# the one the report was about.
+OUT=$(nwc -service "$SERVICE_PK" -secret "$CLIENT_SK" -method list_transactions \
+        -params '{"type":"incoming","limit":50}' -timeout 20s) \
+  || die "list_transactions got no answer"
+LISTED=$(printf '%s' "$OUT" | jq -r --arg h "$RECV_HASH" \
+  '.result.transactions[] | select(.payment_hash == $h) | .preimage // empty')
+[ "$LISTED" = "$RECV_PROOF" ] \
+  || die "list_transactions carries preimage '${LISTED:0:8}' on the received payment, want the node's ${RECV_PROOF:0:8}…: $OUT"
+# And NO row on the page spells "withheld" as "": absent is the shape, and a
+# client lists every non-null detail it is given.
+printf '%s' "$OUT" | jq -e '[.result.transactions[] | select(has("preimage") and .preimage == "")] | length == 0' >/dev/null \
+  || die "a row carries \"preimage\": \"\"; a proof a row cannot give is a missing key, not an empty string: $OUT"
+ok "list_transactions carries the same proof on the received payment, and no row sends \"\""
 
 printf '\n\033[32mNWC CHECK PASSED\033[0m — §8'"'"'s service answers over a real relay, idempotently.\n\n'
