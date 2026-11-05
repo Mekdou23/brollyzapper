@@ -109,6 +109,11 @@ func redactionSubjects(t *testing.T) map[string]subject {
 	zap := store.SettledZap{PaymentHash: strings.Repeat("b", 64), Preimage: secret.New(sentinel + "-preimage")}
 	auth := api.AuthOptions{AdminPassword: secret.New(sentinel + "-app"), SessionSecret: secret.New(sentinel + "-session")}
 	pay := nwc.PayResult{Settled: true, FeeMsat: 21, Preimage: secret.New(sentinel + "-pay-preimage")}
+	// Both invoice types gained the preimage in d24.28, when lookup_invoice started
+	// carrying it: the store read joins it from the settled txn, and the nwc shape
+	// is what the adapter hands the service.
+	storeInv := store.Invoice{PaymentHash: strings.Repeat("c", 64), AmountMsat: 21_000, State: store.InvoiceSettled, Preimage: secret.New(sentinel + "-store-invoice-preimage")}
+	nwcInv := nwc.Invoice{PaymentHash: strings.Repeat("d", 64), AmountMsat: 21_000, SettledAt: time.Unix(1_700_000_000, 0), Preimage: secret.New(sentinel + "-nwc-invoice-preimage")}
 
 	// Hand-kept, and it is the arch rule TestEverySecretBearingStructRedactsItself
 	// that stops it narrowing silently: that rule fails when a struct gains a
@@ -148,6 +153,8 @@ func redactionSubjects(t *testing.T) map[string]subject {
 			"SessionSecret": auth.SessionSecret.Reveal,
 		}},
 		"nwc.PayResult": {pay, map[string]func() string{"Preimage": pay.Preimage.Reveal}},
+		"store.Invoice": {storeInv, map[string]func() string{"Preimage": storeInv.Preimage.Reveal}},
+		"nwc.Invoice":   {nwcInv, map[string]func() string{"Preimage": nwcInv.Preimage.Reveal}},
 	}
 }
 

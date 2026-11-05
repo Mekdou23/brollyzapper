@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/davotoula/brollyzapper/internal/nostr"
+	"github.com/davotoula/brollyzapper/internal/secret"
 	"github.com/davotoula/brollyzapper/internal/store"
 )
 
@@ -346,10 +347,10 @@ func TestAHistoryOfZapsIsAnswered(t *testing.T) {
 // use its own label, and it does so for history that ALREADY EXISTS — no client
 // change, no migration.
 //
-// Not the same call as the preimage's a few lines below, which is deliberately
-// an empty string: "not settled", "not yours" and "this field is new" must not
-// be distinguishable there, and none of them is the client's business. A
-// description has no such secret to keep.
+// The preimage made the opposite call at first — "" rather than absent, so that
+// "not settled", "not yours" and "this field is new" were indistinguishable —
+// and a client rendered that "" exactly as it rendered this one. It joined this
+// doctrine in d24.28; see TestARowWithNothingToProveHasNoPreimage.
 func TestARowWithNoMemoHasNoDescription(t *testing.T) {
 	row := txnResult(store.Txn{
 		Kind: "payment_out", State: "settled", AmountMsat: 21_000,
@@ -634,5 +635,48 @@ func TestAnOutgoingRowCarriesTheInvoicesCommitment(t *testing.T) {
 	}, 0)
 	if _, present := bare["description_hash"]; present {
 		t.Errorf("description_hash = %#v on a row with none", bare["description_hash"])
+	}
+}
+
+// A row with nothing to prove has NO preimage key (d24.28) — the doy.1 call,
+// applied to the one field that had opted out of it.
+//
+// txnResult used to send "" for a withheld or unknown preimage, reasoning that a
+// client need not tell "not settled" from "not yours" from "this field is new".
+// A client rendered it anyway: Amethyst listed every non-null detail, so a
+// received zap showed a preimage label with nothing beside it — the same
+// occupied-but-empty line the description fix removed. And "" is not a
+// preimage; NIP-47 marks the field optional, and optional is spelled absent.
+func TestARowWithNothingToProveHasNoPreimage(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		txn    store.Txn
+		caller int64
+	}{
+		{"an outgoing row settled before d24.16 kept no proof", store.Txn{
+			Kind: "payment_out", State: "settled", NWCConnectionID: 7,
+		}, 7},
+		{"another connection's payment withholds its proof", store.Txn{
+			Kind: "payment_out", State: "settled", NWCConnectionID: 8,
+			Preimage: secret.New("proof-of-theirs"),
+		}, 7},
+		{"a pending incoming row has no proof yet", store.Txn{
+			Kind: "invoice_in", State: "pending",
+		}, 7},
+		// The != 0 clause: a row nobody's connection paid, asked about by a caller
+		// whose id is also 0. No live connection has id 0; a harness might, and
+		// "0 == 0" must not read as "mine" (review, d24.28).
+		{"an outgoing row nobody's connection paid, asked by connection 0", store.Txn{
+			Kind: "payment_out", State: "settled", Preimage: secret.New("proof-of-nobody"),
+		}, 0},
+		// Fail closed: a kind that is neither incoming nor outgoing reveals nothing,
+		// whoever asks.
+		{"a kind the history filter does not emit today", store.Txn{
+			Kind: "adjustment", State: "settled", Preimage: secret.New("proof-of-what"),
+		}, 7},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			assertOptional(t, txnResult(c.txn, c.caller), "preimage", nil)
+		})
 	}
 }

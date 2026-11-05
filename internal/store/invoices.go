@@ -13,9 +13,10 @@ import (
 	"github.com/davotoula/brollyzapper/internal/secret"
 )
 
-// Invoice is the pre-settlement record of an inbound invoice (spec §4). It is
-// the only place an unpaid invoice exists; once it settles, a txns row of kind
-// invoice_in carries it.
+// Invoice is the record of an inbound invoice (spec §4). It is the only place an
+// unpaid invoice exists; once it settles, a txns row of kind invoice_in carries
+// the settlement, and a read of the invoice joins that row for its proof and
+// its time (d24.28).
 type Invoice struct {
 	PaymentHash     string
 	AmountMsat      int64
@@ -34,6 +35,24 @@ type Invoice struct {
 	State     string
 	CreatedAt time.Time
 	ExpiresAt time.Time
+	// Preimage and SettledAt are read from the settled txn — the invoices row
+	// never holds them — and are zero until it settles. Typed so that an Invoice
+	// through slog cannot leak the proof (§12). Both reach NWC lookup_invoice
+	// (d24.28; see nwc.invoiceResult).
+	Preimage  secret.String
+	SettledAt time.Time
+}
+
+// LogValue keeps the preimage out of a log line even when a whole Invoice is
+// handed to slog (§12). The hash identifies the invoice; the proof belongs to
+// the client that asks for it.
+func (i Invoice) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("payment_hash", shortID(i.PaymentHash)),
+		slog.Int64("amount_msat", i.AmountMsat),
+		slog.String("state", i.State),
+		slog.Bool("has_preimage", !i.Preimage.IsZero()),
+	)
 }
 
 // CreateInvoice records a freshly minted invoice.
@@ -56,19 +75,33 @@ func (s *Store) CreateInvoice(ctx context.Context, inv Invoice) error {
 	return nil
 }
 
+// invoiceLookupSQL is one invoice with its settlement. THE PROOF AND THE TIME
+// COME FROM THE SETTLED TXN, which is the only row that holds them
+// (CreditSettledInvoice); at most one matches, because migration 0008 keeps
+// txns.payment_hash unique among invoice_in rows, and the join term names that
+// kind so the planner can use the partial index — asserted as a plan, not an
+// index, in migrate_internal_test.go (§13).
+const invoiceLookupSQL = `SELECT i.payment_hash, i.amount_msat, i.description_hash, i.bolt11,
+	        i.zap_request, i.zap_relays, COALESCE(i.comment, ''), i.state, i.created_at,
+	        i.expires_at, t.preimage, t.settled_at
+	   FROM invoices i
+	   LEFT JOIN txns t ON t.payment_hash = i.payment_hash AND t.kind = 'invoice_in'
+	  WHERE i.payment_hash = ?`
+
 // Invoice reads one invoice by payment hash.
 func (s *Store) Invoice(ctx context.Context, paymentHash string) (Invoice, bool, error) {
 	var (
 		inv                   Invoice
 		zapRequest, zapRelays sql.NullString
 		createdAt, expiresAt  int64
+		settledAt             sql.NullInt64
 	)
-	err := s.db.QueryRowContext(ctx,
-		`SELECT payment_hash, amount_msat, description_hash, bolt11, zap_request, zap_relays,
-		        COALESCE(comment, ''), state, created_at, expires_at
-		 FROM invoices WHERE payment_hash = ?`, paymentHash).
+	// Straight into the field (twt): secret.String scans NULL and '' to its
+	// zero value alike.
+	err := s.db.QueryRowContext(ctx, invoiceLookupSQL, paymentHash).
 		Scan(&inv.PaymentHash, &inv.AmountMsat, &inv.DescriptionHash, &inv.Bolt11,
-			&zapRequest, &zapRelays, &inv.Comment, &inv.State, &createdAt, &expiresAt)
+			&zapRequest, &zapRelays, &inv.Comment, &inv.State, &createdAt, &expiresAt,
+			&inv.Preimage, &settledAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Invoice{}, false, nil
 	}
@@ -79,6 +112,9 @@ func (s *Store) Invoice(ctx context.Context, paymentHash string) (Invoice, bool,
 	inv.ZapRelays = zapRelays.String
 	inv.CreatedAt = unixTime(createdAt)
 	inv.ExpiresAt = unixTime(expiresAt)
+	if settledAt.Valid {
+		inv.SettledAt = unixTime(settledAt.Int64)
+	}
 	return inv, true, nil
 }
 
@@ -574,7 +610,8 @@ type Txn struct {
 	Preimage secret.String
 	// NWCConnectionID is the pairing that asked for this payment, 0 when none
 	// did. It is what lets a caller answer "is this row THIS client's?" — see
-	// nwc.txnResult, which reveals a preimage only for a connection's own rows.
+	// nwc.txnResult, which reveals an outgoing row's preimage only to the
+	// connection that paid it (incoming rows are the node's own; d24.28).
 	NWCConnectionID int64
 	CreatedAt       time.Time
 	SettledAt       time.Time

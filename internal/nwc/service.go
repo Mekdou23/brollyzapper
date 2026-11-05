@@ -15,6 +15,7 @@ import (
 	"github.com/davotoula/brollyzapper/internal/lnurl"
 	"github.com/davotoula/brollyzapper/internal/logging"
 	"github.com/davotoula/brollyzapper/internal/nostr"
+	"github.com/davotoula/brollyzapper/internal/secret"
 	"github.com/davotoula/brollyzapper/internal/store"
 )
 
@@ -44,8 +45,24 @@ type Invoice struct {
 	Description string
 	CreatedAt   time.Time
 	ExpiresAt   time.Time
-	SettledAt   time.Time
-	Settled     bool
+	// SettledAt and Preimage are zero until the invoice is PAID. Settlement is
+	// the time being set, not a flag beside it (d24.28 dropped the flag: two
+	// fields that could disagree, and a fixture that made them). The proof is
+	// typed so that an Invoice through slog cannot leak it (§12); see
+	// invoiceResult for where it is revealed.
+	SettledAt time.Time
+	Preimage  secret.String
+}
+
+// LogValue keeps the preimage out of a log line even when a whole Invoice is
+// handed to slog (§12).
+func (i Invoice) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("payment_hash", logging.Short(i.PaymentHash)),
+		slog.Int64("amount_msat", i.AmountMsat),
+		slog.Bool("settled", !i.SettledAt.IsZero()),
+		slog.Bool("has_preimage", !i.Preimage.IsZero()),
+	)
 }
 
 // Node is the read-only node facts get_info reports.
@@ -1024,38 +1041,32 @@ func encodedSize(value any) int {
 // invoice this app paid — so ONE field answers "what was this for" whichever way
 // the money went.
 //
-// THE PREIMAGE IS REVEALED ONLY FOR THIS CONNECTION'S OWN PAYMENTS, and the
-// scoping is the whole of what makes revealing it defensible.
+// THE PREIMAGE IS REVEALED ON EVERY INCOMING ROW AND ON THIS CONNECTION'S OWN
+// PAYMENTS, and withheld — key absent — on payments other connections or the
+// operator made. Two rulings, one each way:
 //
-// The first version revealed it on every row, which review caught: the history
-// filter has no connection dimension, so a pairing holding nothing but the
-// default `history` group was handed the preimage of every zap the node had
-// EVER received and of every payment any other app or the operator had made. A
-// preimage is the proof-of-payment token — an app holding one can assert to
-// anyone that it paid an invoice it never paid. "Lets this app list payments in
-// and out" is not consent to that.
+//   - Outgoing proof is the payer's (d24.16). The history filter has no
+//     connection dimension, so revealing it on every row handed a pairing
+//     holding only the `history` group the proof of every payment any other app
+//     or the operator had made — and a preimage lets its holder assert to anyone
+//     that it PAID. Scoping is possible because d24.15 writes nwc_connection_id
+//     on the payment_out row at reserve time.
+//   - Incoming proof is the node's own (d24.28). The node minted the invoice,
+//     so it is the one party entitled to the proof; a wallet shows it against a
+//     received payment; and for every zap it is already public on the kind 9735
+//     receipt (internal/zap/receipt.go). Withholding it protected nothing.
 //
-// Scoping is possible at all because d24.15 started writing nwc_connection_id,
-// which is the same column the resolver needed. Rows with no connection —
-// incoming invoices, the operator's own payments, everything written before this
-// wave — keep their proof to themselves.
-//
-// THE PREIMAGE is the empty string rather than a missing key, so a client does
-// not have to tell "not settled" from "not mine" from "this field is new"; none
-// of those is its business, and all three mean the same thing to it. The
-// description is the opposite call (doy.1) and the difference is that it has no
-// secret to keep — see below.
+// WITHHELD MEANS ABSENT, not "" (d24.28). "" was chosen so a client need not
+// tell "not settled" from "not mine" from "this field is new"; Amethyst
+// rendered it as a preimage label with nothing beside it, exactly as it
+// rendered the empty description doy.1 removed. And "" is not a preimage —
+// NIP-47 marks the field optional, which is spelled absent.
 func txnResult(txn store.Txn, connectionID int64) map[string]any {
-	preimage := ""
-	if txn.NWCConnectionID != 0 && txn.NWCConnectionID == connectionID {
-		preimage = txn.Preimage.Reveal()
-	}
 	out := map[string]any{
 		"type":         txnType(txn.Kind),
 		"amount":       txn.AmountMsat,
 		"fees_paid":    txn.FeeMsat,
 		"payment_hash": txn.PaymentHash,
-		"preimage":     preimage,
 		"state":        txn.State,
 		// WHEN, which is why every row in the operator's wallet app was an
 		// undated arrow (d24.27). It was on the row the whole time;
@@ -1103,7 +1114,33 @@ func txnResult(txn store.Txn, connectionID int64) map[string]any {
 	if txn.OutDescriptionHash != "" {
 		out["description_hash"] = txn.OutDescriptionHash
 	}
+	if proofBelongsTo(txn, connectionID) {
+		revealPreimage(out, txn.Preimage)
+	}
 	return out
+}
+
+// proofBelongsTo is the scoping rule txnResult's comment argues. The != 0
+// clause keeps a row nobody's connection paid — the operator's, or one written
+// before d24.15 — from matching a caller whose id is also 0, which no live
+// connection has but a test harness might. FAIL CLOSED: the incoming kind is
+// named, not inferred as "whatever is not outgoing", so a kind the history
+// filter widens to tomorrow reveals nothing by default (review, d24.28).
+func proofBelongsTo(txn store.Txn, connectionID int64) bool {
+	if incomingKind(txn.Kind) {
+		return true
+	}
+	return outgoingKind(txn.Kind) && txn.NWCConnectionID != 0 && txn.NWCConnectionID == connectionID
+}
+
+// revealPreimage is THE ONE LINE IN THIS FILE where a preimage becomes a plain
+// string — internal/arch counts the exits, and list_transactions and
+// lookup_invoice share this one. Callers decide WHETHER; this decides only the
+// shape: present with the proof, or the key absent, never "" (d24.28).
+func revealPreimage(out map[string]any, preimage secret.String) {
+	if proof := preimage.Reveal(); proof != "" {
+		out["preimage"] = proof
+	}
 }
 
 // zapMetadata is NIP-47's `metadata` for a row that carried a zap request, and
@@ -1205,9 +1242,15 @@ func invoiceResult(inv Invoice) map[string]any {
 	if inv.Description != "" {
 		out["description"] = inv.Description
 	}
-	if inv.Settled {
+	// ONLY WHEN SETTLED, which is the time being set. The lookup path did not
+	// carry the time until d24.28 and emitted the field on a flag instead, so
+	// every settled lookup_invoice answered -62135596800 — the zero time's Unix
+	// value, year 1 — which a client renders as a date. The preimage is zero
+	// until the same moment, and revealPreimage omits a zero.
+	if !inv.SettledAt.IsZero() {
 		out["settled_at"] = inv.SettledAt.Unix()
 	}
+	revealPreimage(out, inv.Preimage)
 	return out
 }
 
@@ -1227,6 +1270,12 @@ func txnType(kind string) string {
 // protocol reason would then silently change which column an outgoing row reads
 // from, with nothing for the compiler to catch.
 func outgoingKind(kind string) bool { return strings.HasPrefix(kind, "payment_out") }
+
+// incomingKind names the one incoming kind rather than inferring it, so that a
+// caller asking "may this row's proof be shown" fails closed on anything else
+// (proofBelongsTo). txnType's fallback to "incoming" predates it and is the
+// wire word, not the entitlement.
+func incomingKind(kind string) bool { return kind == store.KindInvoiceIn }
 
 // nonNull makes an absent params object an empty one, so a request with no
 // params decodes to zero values rather than failing.
