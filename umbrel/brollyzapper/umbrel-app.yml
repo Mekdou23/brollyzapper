@@ -2,7 +2,7 @@ manifestVersion: 1
 id: brollyzapper
 category: bitcoin
 name: BrollyZapper
-version: "0.1.23"
+version: "0.1.24"
 tagline: Receive Nostr zaps and connect wallets to your own Lightning node
 description: >-
   BrollyZapper adds Nostr zap receiving (NIP-57) and Nostr Wallet Connect
@@ -40,16 +40,12 @@ description: >-
 # this stays empty — a lint that has to be deleted the week after it lands is
 # worse than the comment you are reading.
 releaseNotes: >-
-  Zapping your own note no longer switches sending off: the app refuses an invoice addressed to
-  its own node and tells the wallet why, and a payment the node rejected without starting is
-  recognised as never sent, so it no longer holds part of the spending ceiling until you act. The
-  Security page now says which kind of payment hold is stopping sending — one that clears itself,
-  or one only you can settle on the Wallet page — and the Wallet page's "It failed" button no
-  longer lands on "page not found". A wrong admin macaroon mounted into the guard is a diagnosis
-  on the Security page rather than a crash loop, and the guard and the server ask your node which
-  stage it is in before treating a refusal as a macaroon rotation. Built with Go 1.27.2, which
-  carries the fixes for twelve standard-library security advisories reachable from this app.
-  Nothing to do on upgrade.
+  Received zaps now carry their payment preimage to a connected wallet: list_transactions reveals it
+  on every incoming payment, and lookup_invoice carries the preimage and the settle time once an
+  invoice settles, so a wallet that shows proof of payment shows it for received zaps as well as
+  sent ones. A withheld preimage is now absent rather than empty, and lookup_invoice no longer
+  reports the year 1 as every settled invoice's settle time. Built with Go 1.27.3, which fixes a
+  certificate-verification advisory reachable from this app. Nothing to do on upgrade.
 
 developer: davotoula
 website: https://github.com/davotoula/brollyzapper
