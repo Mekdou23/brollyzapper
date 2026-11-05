@@ -1379,6 +1379,22 @@ func (f *fakeWallet) balanceCalls() int {
 	return f.calls
 }
 
+// assertOptional is the doy.1 doctrine as one assertion: an optional field is
+// PRESENT with its value, or ABSENT — never present and empty, which a client
+// renders as an occupied line showing nothing. want == nil means absent.
+func assertOptional(t *testing.T, row map[string]any, key string, want any) {
+	t.Helper()
+	got, present := row[key]
+	switch {
+	case want == nil && present:
+		t.Errorf("%s = %#v; a value this row cannot give is a missing key, not an empty one", key, got)
+	case want != nil && !present:
+		t.Errorf("%s is absent, want %v", key, want)
+	case want != nil && got != want:
+		t.Errorf("%s = %#v, want %v", key, got, want)
+	}
+}
+
 type fakeInvoices struct {
 	minted int
 	// filters records what List was ASKED for, because d24.12's bug was a filter
@@ -1386,6 +1402,9 @@ type fakeInvoices struct {
 	// against exactly that.
 	filters []store.TxnFilter
 	txns    []store.Txn
+	// lookup, when set, is what Lookup answers for "hash" — a settled invoice with
+	// its proof, or an open one without (d24.28).
+	lookup *Invoice
 }
 
 func (f *fakeInvoices) Mint(_ context.Context, amountMsat int64, description string) (Invoice, error) {
@@ -1399,6 +1418,9 @@ func (f *fakeInvoices) Mint(_ context.Context, amountMsat int64, description str
 func (f *fakeInvoices) Lookup(_ context.Context, hash string) (Invoice, bool, error) {
 	if hash != "hash" {
 		return Invoice{}, false, nil
+	}
+	if f.lookup != nil {
+		return *f.lookup, true, nil
 	}
 	return Invoice{Bolt11: "lnbcrt1minted", PaymentHash: hash}, true, nil
 }
