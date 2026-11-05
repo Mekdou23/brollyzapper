@@ -104,12 +104,14 @@ stack is reproducible. To run what is currently checked out:
 docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
-The canonical file now pins the **0.1.21** images by digest — verified 2026-09-15 (`0vk.60`) on a
-stack brought up from empty volumes, both containers reporting `version 0.1.21`. `smoke.sh` passes
-as-is (clean chain, mint, pay, credit once, receipt read back off the relay), and so does every
+The canonical file now pins the **0.1.24** images by digest — verified 2026-11-05 (the 0.1.24 cut)
+on a stack brought up from empty volumes and `regtest/data`, both containers running the published
+digests: `smoke.sh`, `e2e.sh`, `authorise.sh`, `nwc.sh`, `spend.sh`, `cap.sh`, `ipaddr.sh`,
+`rotation.sh` and `wrongmount.sh` all pass in that order, 232 criteria and no FAIL, before the tag
+was cut. Before it the file read 0.1.21 — verified 2026-09-15 (`0vk.60`) by `smoke.sh` and every
 `authorise.sh` criterion, including §7's refusal naming the cap to move, which 0.1.16 could not
-pass. Before it, 0.1.10 (2026-08-22) and 0.1.16 (2026-08-31) were proved by `smoke.sh` from empty
-volumes, and before them it read 0.1.5, the first release publishing zap receipts. **Every
+pass — and before that 0.1.10 (2026-08-22) and 0.1.16 (2026-08-31) were proved by `smoke.sh` from
+empty volumes, and 0.1.5 was the first release publishing zap receipts. **Every
 bump is re-proved by a run rather than assumed — `smoke.sh` and `authorise.sh` at minimum, since
 0.1.16 passed the first while failing the second** — a pin nobody has exercised is a pin that
 documents a version instead of testing one. The build override exists to run the *working tree*
