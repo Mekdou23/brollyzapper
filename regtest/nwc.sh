@@ -1004,17 +1004,13 @@ ok "an ordinary payment after the self-zap settled"
 
 # ---------------------------------------------------------------------------
 say "17. d24.28: a received payment carries its proof, and it is the node's"
-# From the Amethyst side (2026-11-05): a settled incoming zap came back from
-# list_transactions with "preimage": "" — present and empty — while outgoing
-# rows carried theirs. Not a dropped value: txnResult withheld every row the
-# calling connection had not paid, and spelled "withheld" as "". Incoming rows
-# are never the caller's payment, so every received payment rendered a preimage
-# label with nothing beside it. lookup_invoice, meanwhile, never sent the field.
-#
-# Three claims against a real node, because each could pass at unit level on a
-# value the app made up: both reads carry the proof on a settled incoming row;
-# it is the preimage LND settled with; and sha256 of it is the payment hash —
-# which is what makes it a proof at all, and what "" can never be.
+# A settled incoming zap came back from list_transactions with "preimage": ""
+# and lookup_invoice never sent the field (d24.28, from the Amethyst side; the
+# rulings are on nwc.txnResult). Three claims against a real node, because each
+# could pass at unit level on a value the app made up: both reads carry the
+# proof on a settled incoming row; it is the preimage LND settled with; and
+# sha256 of it is the payment hash — which is what makes it a proof at all, and
+# what "" can never be.
 #
 # ANY settled incoming payment will do — the claims are about the shape of the
 # answer, not about which zap. Section 6 and every ensure_ledger top-up settle

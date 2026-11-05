@@ -205,40 +205,27 @@ func TestAReplayIsFreshlySealedFromPlaintext(t *testing.T) {
 	}
 }
 
-// assertOptional is the doy.1 doctrine as one assertion: an optional field is
-// PRESENT with its value, or ABSENT — never present and empty, which a client
-// renders as an occupied line showing nothing. want == nil means absent.
-func assertOptional(t *testing.T, row map[string]any, key string, want any) {
-	t.Helper()
-	got, present := row[key]
-	switch {
-	case want == nil && present:
-		t.Errorf("%s = %#v; a value this row cannot give is a missing key, not an empty one", key, got)
-	case want != nil && !present:
-		t.Errorf("%s is absent, want %v", key, want)
-	case want != nil && got != want:
-		t.Errorf("%s = %#v, want %v", key, got, want)
-	}
-}
-
-// lookup_invoice carries the preimage once the invoice has settled, and no key
-// before (d24.28).
+// lookup_invoice carries the preimage and the settle time once the invoice has
+// settled, and neither key before (d24.28).
 //
 // NIP-47 lists `preimage` on the lookup_invoice result, and this is the ONE
 // method a client that minted an invoice through make_invoice can ask for its
 // proof with — a paired app polling for "has my invoice been paid" gets the
-// settle time and the proof in the same answer.
+// settle time and the proof in the same answer. The time was emitted on a flag
+// before this, and the lookup path never set it, so every settled lookup
+// answered year 1; the reason is on invoiceResult.
 func TestLookupInvoiceCarriesThePreimageOnceSettled(t *testing.T) {
 	for _, c := range []struct {
-		name    string
-		invoice Invoice
-		want    any // nil: the key must be absent
+		name      string
+		invoice   Invoice
+		preimage  any // nil: the key must be absent
+		settledAt any
 	}{
 		{"settled", Invoice{
 			Bolt11: "lnbcrt1minted", PaymentHash: "hash",
 			SettledAt: time.Unix(1_700_000_000, 0), Preimage: secret.New("proof-of-received"),
-		}, "proof-of-received"},
-		{"still open", Invoice{Bolt11: "lnbcrt1minted", PaymentHash: "hash"}, nil},
+		}, "proof-of-received", int64(1_700_000_000)},
+		{"still open", Invoice{Bolt11: "lnbcrt1minted", PaymentHash: "hash"}, nil, nil},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t)
@@ -252,21 +239,8 @@ func TestLookupInvoiceCarriesThePreimageOnceSettled(t *testing.T) {
 			if !ok {
 				t.Fatalf("result is %T, want a map", resp.Result)
 			}
-			assertOptional(t, result, "preimage", c.want)
+			assertOptional(t, result, "preimage", c.preimage)
+			assertOptional(t, result, "settled_at", c.settledAt)
 		})
 	}
-}
-
-// A settled invoice says WHEN it settled, and an open one says nothing (d24.28,
-// from regtest nwc.sh §17).
-//
-// invoiceResult emitted settled_at on a Settled flag, and the lookup path never
-// populated the time — the store read did not carry it and the adapter did not
-// map it — so every settled lookup_invoice answered settled_at: -62135596800,
-// the zero time's Unix value, year 1. The flag is gone: settlement IS the time
-// being set, so the two can no longer disagree.
-func TestASettledInvoiceSaysWhenItSettled(t *testing.T) {
-	settledAt := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
-	assertOptional(t, invoiceResult(Invoice{SettledAt: settledAt}), "settled_at", settledAt.Unix())
-	assertOptional(t, invoiceResult(Invoice{}), "settled_at", nil)
 }

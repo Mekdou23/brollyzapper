@@ -1784,10 +1784,11 @@ func preimageReveals(t *testing.T, f sourceFile) []preimageReveal {
 		}
 		// The thing being revealed, as written: `z.Preimage`, `result.Preimage`,
 		// `preimage`.
-		if !strings.Contains(strings.ToLower(typeString(sel.X)), "preimage") {
+		recv := typeString(sel.X)
+		if !strings.Contains(strings.ToLower(recv), "preimage") {
 			return true
 		}
-		out = append(out, preimageReveal{fset.Position(sel.Pos()).Line, typeString(sel.X)})
+		out = append(out, preimageReveal{fset.Position(sel.Pos()).Line, recv})
 		return true
 	})
 	return out
@@ -1844,10 +1845,11 @@ func (z *Zap) tags() [][]string { return nil }
 		t.Errorf("a comment naming Preimage.Reveal() counted as %d reveals, want 0; a deleted "+
 			"exit would still read as present", got)
 	}
-	// And the control: the call itself is counted, on a field or on a parameter.
+	// And the control: the call itself is counted, on a field, and so is the
+	// method value — a Reveal handed on uncalled is still an exit. (The call on
+	// a parameter is the catches plant above.)
 	for name, src := range map[string]string{
 		"a field":        "func (z *Zap) preimage() string { return z.Preimage.Reveal() }",
-		"a parameter":    "func reveal(preimage secret.String) string { return preimage.Reveal() }",
 		"a method value": "func reveal(preimage secret.String) func() string { return preimage.Reveal }",
 	} {
 		if got := len(preimageReveals(t, planted("internal/zap", "package zap\n\n"+src+"\n"))); got != 1 {

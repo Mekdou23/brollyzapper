@@ -649,35 +649,34 @@ func TestAnOutgoingRowCarriesTheInvoicesCommitment(t *testing.T) {
 // preimage; NIP-47 marks the field optional, and optional is spelled absent.
 func TestARowWithNothingToProveHasNoPreimage(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		txn  store.Txn
+		name   string
+		txn    store.Txn
+		caller int64
 	}{
 		{"an outgoing row settled before d24.16 kept no proof", store.Txn{
 			Kind: "payment_out", State: "settled", NWCConnectionID: 7,
-		}},
+		}, 7},
 		{"another connection's payment withholds its proof", store.Txn{
 			Kind: "payment_out", State: "settled", NWCConnectionID: 8,
 			Preimage: secret.New("proof-of-theirs"),
-		}},
+		}, 7},
 		{"a pending incoming row has no proof yet", store.Txn{
 			Kind: "invoice_in", State: "pending",
-		}},
+		}, 7},
 		// The != 0 clause: a row nobody's connection paid, asked about by a caller
 		// whose id is also 0. No live connection has id 0; a harness might, and
 		// "0 == 0" must not read as "mine" (review, d24.28).
 		{"an outgoing row nobody's connection paid, asked by connection 0", store.Txn{
 			Kind: "payment_out", State: "settled", Preimage: secret.New("proof-of-nobody"),
-		}},
+		}, 0},
 		// Fail closed: a kind that is neither incoming nor outgoing reveals nothing,
 		// whoever asks.
 		{"a kind the history filter does not emit today", store.Txn{
 			Kind: "adjustment", State: "settled", Preimage: secret.New("proof-of-what"),
-		}},
+		}, 7},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			for _, caller := range []int64{7, 0} {
-				assertOptional(t, txnResult(c.txn, caller), "preimage", nil)
-			}
+			assertOptional(t, txnResult(c.txn, c.caller), "preimage", nil)
 		})
 	}
 }

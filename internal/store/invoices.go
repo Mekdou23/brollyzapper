@@ -35,14 +35,11 @@ type Invoice struct {
 	State     string
 	CreatedAt time.Time
 	ExpiresAt time.Time
-	// Preimage is the proof this invoice was PAID, read from the settled txn (the
-	// invoices row never holds it), and zero until then. It is what NWC
-	// lookup_invoice answers with once the invoice settles (d24.28), typed so that
-	// an Invoice through slog cannot leak it (§12).
-	Preimage secret.String
-	// SettledAt is when the invoice was PAID, read from the same txn, zero until
-	// then. lookup_invoice reported the zero time's Unix value for every settled
-	// invoice before this was carried (d24.28, regtest nwc.sh §17).
+	// Preimage and SettledAt are read from the settled txn — the invoices row
+	// never holds them — and are zero until it settles. Typed so that an Invoice
+	// through slog cannot leak the proof (§12). Both reach NWC lookup_invoice
+	// (d24.28; see nwc.invoiceResult).
+	Preimage  secret.String
 	SettledAt time.Time
 }
 
@@ -78,7 +75,6 @@ func (s *Store) CreateInvoice(ctx context.Context, inv Invoice) error {
 	return nil
 }
 
-// Invoice reads one invoice by payment hash.
 // invoiceLookupSQL is one invoice with its settlement. THE PROOF AND THE TIME
 // COME FROM THE SETTLED TXN, which is the only row that holds them
 // (CreditSettledInvoice); at most one matches, because migration 0008 keeps
@@ -92,6 +88,7 @@ const invoiceLookupSQL = `SELECT i.payment_hash, i.amount_msat, i.description_ha
 	   LEFT JOIN txns t ON t.payment_hash = i.payment_hash AND t.kind = 'invoice_in'
 	  WHERE i.payment_hash = ?`
 
+// Invoice reads one invoice by payment hash.
 func (s *Store) Invoice(ctx context.Context, paymentHash string) (Invoice, bool, error) {
 	var (
 		inv                   Invoice
