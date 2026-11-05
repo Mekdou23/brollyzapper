@@ -2,6 +2,48 @@
 
 This file starts at 0.1.13; this repository's history begins at 0.1.16.
 
+## 0.1.24 — 2026-11-05
+
+The preimage release. Nine pull requests since 0.1.23: one user-visible, one a security floor, seven
+dependency bumps. A received zap's preimage — the node's own proof of payment, which every zap
+receipt already publishes — was being withheld from the wallet that asked for it: `list_transactions`
+answered `"preimage": ""` on every incoming row, and `lookup_invoice` never sent the field at all.
+Reported from the Amethyst side on 5 Nov, where received zaps showed no proof while sent ones did.
+The withholding was deliberate and the ledger held the preimage the whole time; the rule that scoped
+it to the paying connection could never be satisfied by an incoming row, which carries no connection.
+The rest is the toolchain: Go 1.27.3 for an advisory reachable from both binaries, and the bumps
+gated since the last cut.
+
+### Changed
+
+- **Received payments carry their preimage.** `list_transactions` reveals the preimage on every
+  incoming row to any connection with `history`, since it is the node's own proof and public on every
+  zap receipt; an outgoing row's preimage is still revealed only to the connection that paid it.
+  `lookup_invoice` carries the preimage and `settled_at` once the invoice settles. When a preimage is
+  withheld the key is now absent rather than an empty string, so a client no longer has to tell
+  not-settled from not-mine from this-field-is-new by reading `""`. Proved on regtest: a zap received
+  over a real relay answers both methods with the preimage the node settled on.
+- **Built with Go 1.27.3**, which fixes GO-2026-6809 — crypto/x509's intermediate-certificate
+  denylist — reachable from the server and the guard at 1.27.2, the Go that 0.1.23 shipped. The
+  toolchain floor and the base-image digests moved together, as the gate requires.
+- Dependency bumps proposed by Dependabot and gated before merge: `google.golang.org/grpc` 1.85.0
+  (its transport error tables re-read against the payment path's list — unchanged),
+  `modernc.org/sqlite` 1.61.0 (SQLite 3.54.1); the golang and distroless base images refreshed by
+  digest; the CI actions to their current patch releases.
+
+### Fixed
+
+- `lookup_invoice` reported `settled_at` as the year 1 (`-62135596800`, the zero time serialised)
+  on every settled invoice. Found by the regtest check written for the preimage fix, on its first run.
+
+### Accepted, written into the design
+
+- An incoming payment's preimage is revealed to every pairing with `history`; an outgoing one only
+  to the connection that paid it, the ruling from the d24.16 review, kept. Withheld is an absent
+  key, never `""`.
+
+Nothing to do on upgrade. No migration; schema stays 15. No new environment line.
+
 ## 0.1.23 — 2026-10-15
 
 The rotation-and-refusal release. Twelve pull requests since 0.1.22, six of them user-visible, in
