@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/davotoula/brollyzapper/internal/nostr"
+	"github.com/davotoula/brollyzapper/internal/secret"
 	"github.com/davotoula/brollyzapper/internal/store"
 )
 
@@ -201,5 +202,45 @@ func TestAReplayIsFreshlySealedFromPlaintext(t *testing.T) {
 		if !strings.Contains(plaintext, "4242") {
 			t.Errorf("response %d is %q, want the balance", i, plaintext)
 		}
+	}
+}
+
+// lookup_invoice carries the preimage and the settle time once the invoice has
+// settled, and neither key before (d24.28).
+//
+// NIP-47 lists `preimage` on the lookup_invoice result, and this is the ONE
+// method a client that minted an invoice through make_invoice can ask for its
+// proof with — a paired app polling for "has my invoice been paid" gets the
+// settle time and the proof in the same answer. The time was emitted on a flag
+// before this, and the lookup path never set it, so every settled lookup
+// answered year 1; the reason is on invoiceResult.
+func TestLookupInvoiceCarriesThePreimageOnceSettled(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		invoice   Invoice
+		preimage  any // nil: the key must be absent
+		settledAt any
+	}{
+		{"settled", Invoice{
+			Bolt11: "lnbcrt1minted", PaymentHash: "hash",
+			SettledAt: time.Unix(1_700_000_000, 0), Preimage: secret.New("proof-of-received"),
+		}, "proof-of-received", int64(1_700_000_000)},
+		{"still open", Invoice{Bolt11: "lnbcrt1minted", PaymentHash: "hash"}, nil, nil},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.invoices.lookup = &c.invoice
+
+			resp := h.handle(t, MethodLookupInvoice, json.RawMessage(`{"payment_hash":"hash"}`))
+			if resp.Error != nil {
+				t.Fatalf("lookup_invoice was refused: %+v", resp.Error)
+			}
+			result, ok := resp.Result.(map[string]any)
+			if !ok {
+				t.Fatalf("result is %T, want a map", resp.Result)
+			}
+			assertOptional(t, result, "preimage", c.preimage)
+			assertOptional(t, result, "settled_at", c.settledAt)
+		})
 	}
 }
