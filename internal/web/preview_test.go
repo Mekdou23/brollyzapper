@@ -48,6 +48,19 @@ func TestEveryPageRendersWithAFullFixture(t *testing.T) {
 // below finds the row the fixture built.
 const notCheckedTitle = "The node still honours the spend root key"
 
+func TestSecurityTablesUseHorizontalScrolling(t *testing.T) {
+	var b strings.Builder
+	if err := newRenderer(t).Render(&b, "security", fullFixture(time.Now().UTC())); err != nil {
+		t.Fatal(err)
+	}
+	for _, heading := range []string{"Checks", "Security events"} {
+		_, table, found := strings.Cut(b.String(), "<h2>"+heading+"</h2>")
+		if !found || !strings.HasPrefix(strings.TrimSpace(table), `<table class="security-table">`) {
+			t.Errorf("%s: expected the table to opt into horizontal scrolling", heading)
+		}
+	}
+}
+
 // as0.11 criterion 3, by rendering: each of the three verdicts says its own word
 // in the first cell, and only a FAIL names what it blocks. The not-checked row
 // carries Blocks "sending" in the fixture on purpose — a page that read Blocks
