@@ -137,7 +137,7 @@ th, td { text-align: left; padding: .25rem .5rem; border-bottom: 1px solid var(-
    scrolls sideways to 1266px, which is Wave 26's finding again; with it the
    table scrolls and the page does not. Phone LAYOUT is 0vk.17's other thread —
    this is the rule the plan already asked for, in the form that applies. */
-.txns { display: block; overflow-x: auto; }
+.txns, .security-table { display: block; overflow-x: auto; }
 .amount { color: var(--amount); font-variant-numeric: tabular-nums; font-weight: 600; }
 /* A qualifier on the amount, not its peer. */
 .fee { color: var(--muted); font-size: .85rem; font-variant-numeric: tabular-nums; }
