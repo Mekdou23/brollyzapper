@@ -34,13 +34,23 @@ go build ./... && go vet ./... && go test ./... && go test -race ./...
 make cross              # both binaries, linux/amd64 + linux/arm64
 gofmt -l . | grep -v '^internal/lnd/lnrpc/'   # generated code is not ours to format
 go mod tidy -diff
+make public-scan        # nothing private is tracked: home-directory paths, key material, conflict markers
 make vuln               # govulncheck: root symbol scan + regtest tool modules vs regtest/tools/vuln-accepted.txt
+make staticcheck        # the one third-party linter, pinned in the Makefile; lnrpc excluded
 make fuzz               # every Fuzz* target, found by go test -list; ten seconds each
 make toolchain-floor    # go.mod's floor against the Go the pinned base images ship
 ```
 
 `make check` is build, vet and test only — enough while iterating, not the gate. `-race` and
 `make vuln` are not optional: each has caught a defect the rest of the gate passed.
+
+`make staticcheck` is the only third-party linter, and it is not configured: there is no
+`-checks` line and no config file. A finding is fixed, or kept with a
+`//lint:ignore <CHECK> <reason>` comment at the site that says why. `make public-scan` inspects
+what git tracks, so it sees a staged file and not an untracked one. On a fresh checkout it runs
+its generic checks only and says so; that is the same scan CI runs.
+
+If this list and `ci.yml` ever disagree, `ci.yml` is right and this list is the bug.
 
 `make docker` builds the multi-arch distroless images locally (needs a daemon and buildx);
 release images are built by `publish.yml` in CI, never from a laptop.
