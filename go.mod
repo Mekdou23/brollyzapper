@@ -47,7 +47,14 @@ go 1.27.0
 // GO-2026-6809 — a crypto/x509 denylist of compromised intermediate
 // certificates, reachable from every outbound TLS the server makes under
 // system roots. The floor and the two digests moved together.
-toolchain go1.27.3
+//
+// Moved again 14 Nov 2026 (BrollyZap-c75): golang:1.27-alpine@sha256:eb61c387…
+// ships go1.27.4 on both platforms (GOLANG_VERSION in the image config, read
+// for linux/amd64 and linux/arm64), and 1.27.4 carries the fix for
+// GO-2026-6859 — an HTTP/1 server crash from a MaxBytesReader header race in
+// net/http, reachable from the server's own listeners. The floor and the two
+// digests moved together; nothing else moved.
+toolchain go1.27.4
 
 require (
 	github.com/coder/websocket v1.8.15
