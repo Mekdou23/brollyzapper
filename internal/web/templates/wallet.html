@@ -116,7 +116,7 @@
   is what that leaves; the "showing N of M" line is what stops the list reading
   as though it were everything.
 
-  Amounts are rendered by `sats`, which prints msat precision rather than
-  rounding — §4: never floats for money, and never a display that quietly loses
-  the last three digits either.
+  Amounts are rendered by `sats`: whole sats, plus the msat remainder whenever
+  it is non-zero, never rounded — §4: never floats for money, and never a
+  display that quietly loses the last three digits either.
 */}}

@@ -3,6 +3,7 @@ package web_test
 import (
 	"bytes"
 	"html/template"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -462,6 +463,10 @@ func TestSatsRendersWholeSatsAndNonZeroMsatRemainders(t *testing.T) {
 		{21000000000, "21000000"},
 		{-1500, "-1.5"},
 		{-500, "-0.5"},
+		{1010, "1.01"},                           // an inner zero survives the trim
+		{10, "0.01"},                             // a sub-sat amount keeps its leading zero
+		{-1, "-0.001"},                           // the smallest negative keeps its sign
+		{math.MinInt64, "-9223372036854775.808"}, // abs is taken after the division, so nothing overflows
 	}
 	for _, tc := range cases {
 		var buf bytes.Buffer

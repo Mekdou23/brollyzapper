@@ -46,7 +46,7 @@ func settleWith(t *testing.T, db *store.Store, hash string, amountMsat int64,
 // the two forms.
 func TestTheWalletPageShowsTheTransactionHistory(t *testing.T) {
 	h := newHarness(t, func(_ *api.ServerOptions, db *store.Store) {
-		settleWith(t, db, lnurltest.Hex64('a'), 21_000,
+		settleWith(t, db, lnurltest.Hex64('a'), 21_500,
 			string(lnurltest.SignedZapRequest(t, nil)), "thanks for the write-up 🙏")
 	})
 	page := h.get(t, "/", h.login(t)).Body.String()
@@ -54,9 +54,11 @@ func TestTheWalletPageShowsTheTransactionHistory(t *testing.T) {
 	if !strings.Contains(page, "Transactions") {
 		t.Fatal("the Wallet page has no transaction history")
 	}
-	// The amount, rendered as whole sats when the msat remainder is zero (§4).
-	if !strings.Contains(page, `<td class="amount">21</td>`) {
-		t.Errorf("the history does not show the amount in sats")
+	// The amount, with its msat remainder — §4: never floats for money, and
+	// never a display that quietly drops the last three digits either. Whole
+	// amounts are asserted on the Security and Sending pages.
+	if !strings.Contains(page, `<td class="amount">21.5</td>`) {
+		t.Errorf("the history does not show the amount in sats with its msat remainder")
 	}
 	// The sender's own words, which o34.12 stored and nothing could reach.
 	if !strings.Contains(page, "thanks for the write-up") {

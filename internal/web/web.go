@@ -753,16 +753,18 @@ func funcs() template.FuncMap {
 	return template.FuncMap{
 		// sats renders msat as sats for display. Money is msat everywhere else
 		// (§4); this is the only place it is divided, and only for humans.
+		// Whole sats, plus the msat remainder only when it is non-zero, trailing
+		// zeros trimmed: nothing is rounded away. The sign is applied once, to
+		// the whole figure, because msat/1000 alone loses it for -500.
 		"sats": func(msat int64) string {
-			sign := ""
+			s := strconv.FormatInt(abs(msat/1000), 10)
+			if rem := abs(msat % 1000); rem != 0 {
+				s += strings.TrimRight(fmt.Sprintf(".%03d", rem), "0")
+			}
 			if msat < 0 {
-				sign = "-"
+				s = "-" + s
 			}
-			rem := abs(msat % 1000)
-			if rem == 0 {
-				return fmt.Sprintf("%s%d", sign, abs(msat/1000))
-			}
-			return strings.TrimRight(fmt.Sprintf("%s%d.%03d", sign, abs(msat/1000), rem), "0")
+			return s
 		},
 		// One timestamp format in the product. node.html already renders
 		// "2006-01-02 15:04 UTC"; the history had its own pre-rendered string
@@ -771,9 +773,10 @@ func funcs() template.FuncMap {
 		"when": func(t time.Time) string { return t.UTC().Format("2006-01-02 15:04 UTC") },
 		// satsPlain is sats for a FORM FIELD rather than for prose: whole sats,
 		// no decimals, so the number an operator sees in the box is the number
-		// they can type back. `sats` renders "100000.000", which posted back
-		// would not parse as an integer — the field and the sentence beside it
-		// need different renderings of the same msat, and this is the field's.
+		// they can type back. `sats` keeps a non-zero msat remainder ("1.5"),
+		// which posted back would not parse as an integer — the field and the
+		// sentence beside it need different renderings of the same msat, and
+		// this is the field's.
 		//
 		// A cap that does not divide evenly ROUNDS DOWN, which is the safe
 		// direction: re-submitting the form without touching it can only tighten
